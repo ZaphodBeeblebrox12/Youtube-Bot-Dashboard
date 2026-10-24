@@ -340,13 +340,13 @@ The dashboard must have two distinct, clearly labelled modes. Do not mix their e
 
 ### Lever 1 — Session Shield (initial mode)
 
-**No one is banned, muted, timed out, or prevented from chatting.** The purpose is to preserve chat activity while protecting the host's attention and saving AI tokens.
+**No one is banned, platform-muted, timed out, or prevented from chatting.** Session Shield applies an internal, application-level mute only to the Reply Finder/whitelist pipeline: once a user is shielded, their messages are filtered out before they are included in that AI request. They can continue chatting publicly. The purpose is to preserve chat activity while protecting the host's attention and saving AI tokens.
 
 - The moderation/classification pipeline can identify and log likely violations and repeated antagonism, with supporting evidence.
-- A high-confidence flagged user is excluded from the Reply Finder before their messages are sent to that AI. This keeps their messages out of the host's private answer queue and saves Reply Finder tokens.
+- A high-confidence flagged user is **internally muted for the Reply Finder/whitelist pipeline**. Backend code must remove their messages before serializing the Reply Finder AI request; do not send the messages to that AI and merely ask it to ignore them. This keeps their messages out of the host's private answer queue and saves tokens.
 - The user remains fully able to participate in YouTube chat. This lever must not call YouTube ban, timeout, mute, or message-deletion APIs.
 - Session Shield exclusions expire at the end of the current live session. At the next session, the user can enter the Reply Finder again unless flagged anew.
-- UI wording must say “Excluded from reply suggestions until this session ends”, never “banned”, “muted”, “timed out” or “restricted”.
+- UI wording should say “Shielded from Reply Finder until this session ends” or “Excluded from reply suggestions until this session ends”. Do not imply the user is muted or restricted on YouTube. A dashboard status can use “Internally muted from Reply Finder” if the UI makes clear this affects only the private AI queue.
 - Session Shield is not a strike, sanction, or evidence of guilt. A candidate incident may be stored for later review, but only a confirmed offence under the future approved rulebook can count toward strikes.
 
 ### Lever 2 — Active Moderation (future mode; actual bans)
@@ -422,3 +422,15 @@ Requirements:
 - EASY questions may use the shorter response angle already defined; the exact two-sentence answer-generation requirement is mandatory for MODERATE and DIFFICULT questions.
 
 Validation must check that medium/hard suggestions contain exactly two sentences, answer the message, do not invent creator-specific details, and use source-backed verification where required.
+
+
+### Session Shield terminology clarification (decision: 2026-10-24)
+
+“Mute” in Lever 1 means **internal filtering from the Reply Finder/whitelist AI input only**. It is not a YouTube moderation action. The message pipeline should branch so that:
+- incoming chat continues to be received;
+- moderation classification/logging continues on its separate path;
+- for shielded user IDs, messages are filtered out before the Reply Finder payload is built, avoiding all Reply Finder input tokens for those messages;
+- the user remains free to chat on YouTube;
+- the internal mute expires at the current session boundary unless the user is shielded again in a later session.
+
+Tests must inspect the actual serialized Reply Finder request and confirm that shielded users' messages are absent, while confirming the user can still chat and the moderation path is not inadvertently bypassed.
