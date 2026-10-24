@@ -783,3 +783,13 @@ Official YouTube references:
 - Insert poll: https://developers.google.com/youtube/data/live/reference/rest/v3/liveChatMessages/insert
 - End a poll and obtain results: https://developers.google.com/youtube/data/live/reference/rest/v3/liveChatMessages/transition
 - Poll resource and the one-active-poll rule: https://developers.google.com/youtube/data/live/reference/rest/v3/liveChatMessages
+
+
+## Session Shield all-AI exclusion and Super Chat priority (2026-10-25)
+
+- **Shielded viewer rule:** When Session Shield is active for a viewer in the current session, subsequent messages are marked `EXCLUDED_SHIELDED` for both MODERATION and REPLY_FINDER before provider dispatch. Batch preparation checks Shield for both pipelines and scrubs prepared-but-unsent payloads.
+- **Already-dispatched requests:** Provider requests cannot be recalled. If a viewer is shielded while a request is in flight, the task is marked excluded and its response is not persisted into the host queue. Completed moderation results that triggered the shield remain as an audit record.
+- **Enforcement boundary:** Session Shield is a private AI-input exclusion. This repository code does not itself issue YouTube ban, mute, or timeout actions from this feature.
+- **Super Chat detection:** The direct streamList listener stores YouTube-supplied amount micros, currency, amount display string, and tier. Empty-comment Super Chats are still ingested. The normalized JSON bridge accepts equivalent fields from its trusted source.
+- **Super Chat priority:** Pending Super Chats are placed before ordinary chat in AI batches and trigger preparation immediately rather than waiting for the normal two-second window. The Reply Finder prompt treats a paid message as priority when its content is constructive.
+- **Display safety:** Ordinary messages are shown only after a completed high-confidence `NO_VIOLATION` result and Reply Finder selection. Super Chats can bypass the usefulness-selection requirement but still require that same completed, high-confidence safety clearance. The unfiltered control stays off by default.

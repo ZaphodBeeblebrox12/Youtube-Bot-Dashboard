@@ -4,7 +4,7 @@ A private, local-first livestream co-pilot with a curated answer queue, low-nois
 
 ## Safety levers
 
-- **Lever 1 — Session Shield (initial mode):** internally excludes selected users' messages from the Reply Finder AI input for the remainder of the current livestream session. It does not mute, timeout, ban, or restrict the user on YouTube.
+- **Lever 1 — Session Shield:** once a viewer is shielded, subsequent messages are excluded before both moderation and Reply Finder AI calls for the remainder of that livestream session. Requests already dispatched cannot be recalled; completed moderation records that triggered the shield remain in the audit trail. This is an internal AI-input filter, not a YouTube ban, timeout, or mute action.
 - **Lever 2 — Active Moderation (future, disabled):** actual enforcement is out of scope until a separate rulebook is approved and the owner explicitly enables it.
 - **Past Videos Cleanup:** scans comments on the most recent 20 uploads, stores discovered comments, and classifies only newly discovered comments. Initial deletion workflow must be preview-first and owner-approved.
 
@@ -12,7 +12,7 @@ A private, local-first livestream co-pilot with a curated answer queue, low-nois
 
 The first implementation slice is a deterministic policy gate around AI classifications. It separates target, sentiment, and conduct type. Negative sentiment alone is never enough to propose deletion. Genuine criticism such as "This lesson is terrible and your explanation makes no sense" is kept by default. High-confidence personal abuse or another explicitly mapped violation can become a deletion candidate, but still requires owner approval.
 
-The Streamlit panel, durable live queue, optional Gemini/Qwen adapters, authenticated JSON bridge, direct `liveChatMessages.streamList` listener, and Live Polls workspace are present. The poll workspace saves drafts offline, explicitly inserts a poll into a live chat, closes it, and saves YouTube's returned tallies. Direct OAuth and real-broadcast actions still need an owner-authorized smoke test; they are not claimed as end-to-end verified. Provider-specific prompt caching, PostgreSQL production migrations, and historical comment deletion calls remain outstanding. Session Shield does not call YouTube ban/mute/timeout/delete APIs.
+The Streamlit panel, durable live queue, optional Gemini/Qwen adapters, authenticated JSON bridge, direct `liveChatMessages.streamList` listener, source-confirmed Super Chat detection/priority, and Live Polls workspace are present. The poll workspace saves drafts offline, explicitly inserts a poll into a live chat, closes it, and saves YouTube's returned tallies. Direct OAuth and real-broadcast actions still need an owner-authorized smoke test; they are not claimed as end-to-end verified. Provider-specific prompt caching, PostgreSQL production migrations, and historical comment deletion calls remain outstanding. Session Shield does not call YouTube ban/mute/timeout/delete APIs.
 
 ## Development
 
@@ -44,7 +44,7 @@ python -m youtube_bot_dashboard.live_worker
 - [x] Persistent live message/task/batch records for separate moderation and Reply Finder pipelines
 - [x] Configurable live batch settings persisted to the database (2-second delay, 100-message cap, approximate token budget)
 - [x] Round-robin Gemini/Qwen batch routing state, with per-pipeline rotation and fixed-provider options
-- [x] Session Shield filtering before Reply Finder payload creation while moderation tasks continue independently
+- [x] Session Shield filtering before either AI payload is created; shielded viewers' later messages are not sent to moderation or Reply Finder providers
 - [x] Initial Streamlit settings/queue-status dashboard with authenticated normalized-JSON ingest bridge
 - [x] Live moderation and Reply Finder system-prompt templates
 - [ ] PostgreSQL production configuration, migrations, and concurrency hardening
@@ -89,4 +89,13 @@ The ingest bridge accepts a normalized batch at `POST /api/v1/live/ingest` with 
 }
 ```
 
-Each message is stored once and queued independently for moderation and Reply Finder. The optional `is_member` value must come from the source; the system never guesses membership. Community Memory tracks basic visit history by stable channel ID but stores no ordinary chat text as a memory. Reply Finder can suggest a short follow-up when someone shares an ongoing challenge, goal, or progress; the owner must approve it, with at most two saved memories per viewer. During the stream, the queue shows a brief “returning viewer” cue, not another inbox. Session Shield messages still enter moderation but are removed from the Reply Finder payload before its AI call. Treat all message text as untrusted input. Do not expose `INGEST_API_KEY` to viewers or include it in client-side code.
+Each message is stored once and queued independently for moderation and Reply Finder. The optional `is_member` value must come from the source; the system never guesses membership. Community Memory tracks basic visit history by stable channel ID but stores no ordinary chat text as a memory. Reply Finder can suggest a short follow-up when someone shares an ongoing challenge, goal, or progress; the owner must approve it, with at most two saved memories per viewer. During the stream, the queue shows a brief “returning viewer” cue, not another inbox. Once a viewer is shielded, subsequent messages are excluded from both AI pipelines for the remainder of the session. Provider requests already dispatched cannot be recalled; their results are not persisted into the host queue. Treat all message text as untrusted input. Do not expose `INGEST_API_KEY` to viewers or include it in client-side code.
+
+
+### Live Chat display and Super Chat priority
+
+- The default Live Chat feed is fail-closed. Ordinary messages require a completed high-confidence `NO_VIOLATION` moderation result and a positive Reply Finder selection.
+- Super Chats use the same safety gate, then appear at the top even if they have no comment or Reply Finder does not select them. YouTube's amount display, currency, and tier metadata are preserved when supplied.
+- Super Chats are ordered ahead of ordinary messages in AI batches and the Reply Queue; a pending Super Chat triggers immediate batch preparation instead of waiting for the normal two-second collection window.
+- The unfiltered feed is available through an explicit opt-in control and is off by default.
+- Only source-confirmed `super_chat_details` are treated as paid events; text that merely claims to be a Super Chat does not qualify.
