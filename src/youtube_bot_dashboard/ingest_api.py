@@ -45,6 +45,11 @@ class IncomingMessageBody(BaseModel):
     is_member: bool | None = None
     text: str = Field(max_length=10000)
     published_at: datetime | None = None
+    is_super_chat: bool = False
+    super_chat_amount_micros: int | None = Field(default=None, ge=0)
+    super_chat_currency: str | None = Field(default=None, max_length=3)
+    super_chat_amount_display: str | None = Field(default=None, max_length=64)
+    super_chat_tier: int | None = Field(default=None, ge=0)
 
 
 class LiveIngestBody(BaseModel):
@@ -115,6 +120,11 @@ def ingest_payload(factory, body: LiveIngestBody) -> dict:
                         username=item.username,
                         is_member=item.is_member,
                         published_at=item.published_at,
+                        is_super_chat=item.is_super_chat,
+                        super_chat_amount_micros=item.super_chat_amount_micros,
+                        super_chat_currency=item.super_chat_currency,
+                        super_chat_amount_display=item.super_chat_amount_display,
+                        super_chat_tier=item.super_chat_tier,
                     ),
                 )
                 if result.created:

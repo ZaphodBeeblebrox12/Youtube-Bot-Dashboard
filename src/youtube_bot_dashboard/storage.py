@@ -145,15 +145,36 @@ def create_schema(engine: Engine) -> None:
 
     Base.metadata.create_all(engine)
 
-    # Local SQLite databases may predate the ingestion-source discriminator.
-    # This tiny development-only compatibility step is not a substitute for
-    # versioned PostgreSQL migrations in production.
+    # Compatibility migration for SQLite databases that predate the source field.
     if engine.dialect.name == "sqlite":
         columns = {column["name"] for column in inspect(engine).get_columns("live_sessions")}
         if "source" not in columns:
             with engine.begin() as connection:
                 connection.exec_driver_sql(
                     "ALTER TABLE live_sessions ADD COLUMN source VARCHAR(24) NOT NULL DEFAULT 'JSON_INGEST'"
+                )
+
+    # Existing databases may predate source-confirmed paid-message metadata.
+    live_message_columns = {
+        column["name"] for column in inspect(engine).get_columns("live_messages")
+    }
+    super_chat_columns = {
+        "is_super_chat": "BOOLEAN NOT NULL DEFAULT FALSE",
+        "super_chat_amount_micros": "BIGINT",
+        "super_chat_currency": "VARCHAR(3)",
+        "super_chat_amount_display": "VARCHAR(64)",
+        "super_chat_tier": "INTEGER",
+    }
+    missing = [
+        (name, definition)
+        for name, definition in super_chat_columns.items()
+        if name not in live_message_columns
+    ]
+    if missing:
+        with engine.begin() as connection:
+            for name, definition in missing:
+                connection.exec_driver_sql(
+                    f"ALTER TABLE live_messages ADD COLUMN {name} {definition}"
                 )
 
 

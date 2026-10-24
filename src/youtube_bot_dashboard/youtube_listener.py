@@ -141,24 +141,45 @@ def _parse_timestamp(value: str | None) -> datetime | None:
         return None
 
 
-def extract_viewer_text(message) -> tuple[str, str | None, str | None, datetime | None, bool | None] | None:
-    """Extract only human-authored text/comment events, not system chat events."""
+def extract_viewer_text(message) -> tuple[
+    str, str | None, str | None, datetime | None, bool | None,
+    bool, int | None, str | None, str | None, int | None,
+] | None:
+    """Extract source text and source-confirmed YouTube Super Chat metadata."""
     snippet = message.snippet
     text = ""
+    is_super_chat = False
+    amount_micros = None
+    currency = None
+    amount_display = None
+    tier = None
     try:
         if snippet.HasField("text_message_details"):
             text = snippet.text_message_details.message_text
         elif snippet.HasField("super_chat_details"):
-            text = snippet.super_chat_details.user_comment
+            is_super_chat = True
+            details = snippet.super_chat_details
+            text = getattr(details, "user_comment", "") or ""
+            currency = getattr(details, "currency", None) or None
+            amount_display = getattr(details, "amount_display_string", None) or None
+            try:
+                if details.HasField("amount_micros"):
+                    amount_micros = int(details.amount_micros)
+                if details.HasField("tier"):
+                    tier = int(details.tier)
+            except (AttributeError, TypeError, ValueError):
+                pass
         elif snippet.HasField("member_milestone_chat_details"):
             text = snippet.member_milestone_chat_details.user_comment
-    except ValueError:
-        # Older generated schemas may not expose every optional message field.
+    except (AttributeError, ValueError):
         return None
 
     text = (text or "").strip()
+    if not text and is_super_chat:
+        text = (getattr(snippet, "display_message", None) or "Super Chat received (no comment)").strip()
     if not text:
         return None
+
     author = getattr(message, "author_details", None)
     user_id = None
     username = None
@@ -177,7 +198,10 @@ def extract_viewer_text(message) -> tuple[str, str | None, str | None, datetime 
     message_id = getattr(message, "id", None)
     if not message_id:
         return None
-    return text, user_id, username, published_at, is_member
+    return (
+        text, user_id, username, published_at, is_member, is_super_chat,
+        amount_micros, currency, amount_display, tier,
+    )
 
 
 def _cursor_key(live_chat_id: str) -> str:
@@ -220,7 +244,10 @@ def persist_stream_response(
             extracted = extract_viewer_text(item)
             if not extracted:
                 continue
-            text, user_id, username, published_at, is_member = extracted
+            (
+                text, user_id, username, published_at, is_member, is_super_chat,
+                amount_micros, currency, amount_display, tier,
+            ) = extracted
             result = ingest_live_message(
                 session,
                 IncomingLiveMessage(
@@ -231,6 +258,11 @@ def persist_stream_response(
                     username=username,
                     is_member=is_member,
                     published_at=published_at,
+                    is_super_chat=is_super_chat,
+                    super_chat_amount_micros=amount_micros,
+                    super_chat_currency=currency,
+                    super_chat_amount_display=amount_display,
+                    super_chat_tier=tier,
                 ),
             )
             if result.created:

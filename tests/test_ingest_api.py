@@ -95,3 +95,37 @@ def test_ingest_reports_messages_filtered_by_session_shield():
             assert by_pipeline["REPLY_FINDER"].state == TaskState.EXCLUDED_SHIELDED.value
     finally:
         engine.dispose()
+
+def test_json_ingest_preserves_source_confirmed_super_chat_metadata():
+    engine, factory = create_engine_and_sessions("sqlite://")
+    create_schema(engine)
+    try:
+        body = LiveIngestBody(
+            session_id="paid-stream",
+            live_chat_id="youtube-chat-paid",
+            broadcast_id="broadcast-paid",
+            messages=[IncomingMessageBody(
+                message_id="paid-message",
+                user_id="paid-channel",
+                username="Paid Viewer",
+                text="Thanks for the stream!",
+                is_super_chat=True,
+                super_chat_amount_micros=250_000_000,
+                super_chat_currency="INR",
+                super_chat_amount_display="₹250.00",
+                super_chat_tier=1,
+            )],
+        )
+        result = ingest_payload(factory, body)
+        assert result["created"] == 1
+        with factory() as session:
+            from youtube_bot_dashboard.live_queue import LiveMessageRecord
+            paid = session.get(LiveMessageRecord, "paid-message")
+            assert paid is not None
+            assert paid.is_super_chat is True
+            assert paid.super_chat_amount_micros == 250_000_000
+            assert paid.super_chat_currency == "INR"
+            assert paid.super_chat_amount_display == "₹250.00"
+            assert paid.super_chat_tier == 1
+    finally:
+        engine.dispose()
