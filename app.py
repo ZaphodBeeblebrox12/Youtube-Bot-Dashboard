@@ -117,8 +117,9 @@ if page == "Overview":
     st.subheader("Live queue configuration")
     col1, col2, col3 = st.columns(3)
     col1.metric("Batch window", f"{current_config.batch_delay_seconds:g} sec")
-    col2.metric("Batch message cap", current_config.max_messages_per_batch)
-    col3.metric("Provider routing", current_config.provider_strategy.value.replace("_", " ").title())
+    col2.metric("Max messages / batch", current_config.max_messages_per_batch)
+    col3.metric("AI request start gap", f"{current_config.minimum_request_interval_seconds:g} sec")
+    st.caption("Provider routing: " + current_config.provider_strategy.value.replace("_", " ").title())
 
     st.info(
         "YouTube OAuth and live chat ingestion are not connected yet. "
@@ -147,6 +148,14 @@ elif page == "Settings":
             value=float(config.batch_delay_seconds),
             step=0.25,
             help="Default: 2 seconds. A partial batch is flushed when its oldest message reaches this age.",
+        )
+        request_gap = st.number_input(
+            "Minimum gap between AI request starts (seconds)",
+            min_value=0.1,
+            max_value=30.0,
+            value=float(config.minimum_request_interval_seconds),
+            step=0.1,
+            help="Default: 1 second. This is separate from the 2-second collection window and is enforced by the single background worker.",
         )
         max_messages = st.number_input(
             "Maximum messages per batch",
@@ -217,6 +226,7 @@ elif page == "Settings":
         try:
             new_config = LiveQueueConfig(
                 batch_delay_seconds=float(batch_delay),
+                minimum_request_interval_seconds=float(request_gap),
                 max_messages_per_batch=int(max_messages),
                 max_input_tokens=int(max_tokens),
                 system_prompt_reserve_tokens=int(prompt_reserve),
