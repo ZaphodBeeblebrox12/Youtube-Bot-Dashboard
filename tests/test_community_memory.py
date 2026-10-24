@@ -16,6 +16,16 @@ from youtube_bot_dashboard.live_queue import IncomingLiveMessage, ingest_live_me
 from youtube_bot_dashboard.storage import create_engine_and_sessions, create_schema
 
 
+def ingest_source(session, message_id, session_id="s1", user_id="channel-1"):
+    return ingest_live_message(session, IncomingLiveMessage(
+        message_id=message_id,
+        session_id=session_id,
+        user_channel_id=user_id,
+        username="Asha" if user_id else None,
+        text=f"Source message {message_id}",
+    ))
+
+
 def setup_db():
     engine, factory = create_engine_and_sessions("sqlite://")
     create_schema(engine)
@@ -63,6 +73,7 @@ def test_memory_suggestion_requires_existing_profile_and_high_confidence():
     engine, factory = setup_db()
     try:
         with factory() as session:
+            ingest_source(session, "m-1", user_id=None)
             assert create_memory_suggestion(
                 session, user_channel_id="channel-1", session_id="s1", source_message_id="m-1",
                 memory_type="CHALLENGE", summary="Often enters too early",
@@ -90,12 +101,13 @@ def test_one_pending_suggestion_and_two_saved_memories_maximum():
     engine, factory = setup_db()
     try:
         with factory() as session:
-            record_viewer_activity(session, user_channel_id="channel-1", display_name="Asha", session_id="s1")
+            ingest_source(session, "m-1", "s1")
             first = create_memory_suggestion(
                 session, user_channel_id="channel-1", session_id="s1", source_message_id="m-1",
                 memory_type="CHALLENGE", summary="Struggles with early entries",
                 suggested_follow_up="Have entries improved?", confidence=0.95,
             )
+            ingest_source(session, "m-2", "s1")
             assert create_memory_suggestion(
                 session, user_channel_id="channel-1", session_id="s1", source_message_id="m-2",
                 memory_type="PROGRESS", summary="Got better at risk management",
@@ -103,12 +115,14 @@ def test_one_pending_suggestion_and_two_saved_memories_maximum():
             ) is None
             assert review_memory_suggestion(session, memory_id=first.id, decision="SAVE") == "SAVED"
 
+            ingest_source(session, "m-3", "s2")
             second = create_memory_suggestion(
                 session, user_channel_id="channel-1", session_id="s2", source_message_id="m-3",
                 memory_type="PROGRESS", summary="Practicing defined-risk trades",
                 suggested_follow_up="How is that practice going?", confidence=0.93,
             )
             assert review_memory_suggestion(session, memory_id=second.id, decision="SAVE") == "SAVED"
+            ingest_source(session, "m-4", "s1")
             third = create_memory_suggestion(
                 session, user_channel_id="channel-1", session_id="s1", source_message_id="m-4",
                 memory_type="GOAL", summary="Wants to build patience",
