@@ -717,3 +717,13 @@ Active Moderation remains off. The provider worker only classifies and writes in
 
 ### Current API/integration boundary
 The API is a normalized JSON ingestion bridge, not a direct YouTube client. It does not discover streams, authenticate with YouTube, poll `liveChatMessages.list`, or handle OAuth tokens. That direct connector remains a future task. GitHub status queries still return no reported test checks, and tests have not been run in this environment because the local Git clone could not resolve github.com; verify the Actions logs or run the suite in a connected environment before relying on it.
+
+
+## Live settings, queue card, and ingest bridge refinement (2026-10-25)
+
+- The live queue now persists a configurable **minimum AI request-start gap**, default **1 second**, separate from the configurable 2-second batch collection window. A single worker records the last request start timestamp in `app_settings` and waits before starting the next provider call. The initial worker is a single consumer; multi-worker deployment requires an atomic DB lease/rate-limit lock.
+- Settings now include batch delay, maximum messages (100 by default), estimated total input-token budget, system-prompt token reserve, request-start gap, provider selection strategy, and Session Shield confidence threshold (0.90 default).
+- The Reply Queue UI now presents one selected message at a time with the original viewer message, priority, difficulty, trading stance, a suggested live response/cue, research warning when applicable, and **Mark answered** / **Skip-d dismiss** actions. It never posts the response to YouTube.
+- The Live Chat page lists active Session Shield exclusions and allows the owner to clear an internal filter for future messages. Clearing a shield does not requeue previously excluded messages. Existing users remain able to post publicly.
+- The authenticated JSON endpoint is in `src/youtube_bot_dashboard/ingest_api.py`, accepts `POST /api/v1/live/ingest` with `X-Ingest-Key`, and closes a session with `POST /api/v1/live/sessions/{session_id}/end`. Direct YouTube OAuth/polling is still not connected.
+- New tests cover provider response validation, request lifecycle, shield activation before a prepared reply batch is sent, JSON ingestion, duplicate ingestion and shielding. The repository has a CI workflow, but the connector has not returned workflow checks; test execution remains unverified in this environment.
