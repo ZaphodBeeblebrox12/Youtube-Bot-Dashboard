@@ -7,7 +7,7 @@ service V3DataLiveChatMessageService {
 }
 
 message LiveChatMessageListRequest {
-  optional string live_chat_id = 1;
+  optional string live_chat_id = 201;
   optional string hl = 2;
   optional uint32 profile_image_size = 3;
   optional uint32 max_results = 98;
