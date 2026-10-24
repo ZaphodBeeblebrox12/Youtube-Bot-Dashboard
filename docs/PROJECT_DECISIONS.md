@@ -309,8 +309,9 @@ The owner wants to keep the chat open, including antagonistic participants where
 - The exclusion applies to the Reply Finder/answer-assistance path only. **The moderation pipeline continues to screen incoming chat independently** for spam, threats, scams and other policy violations, unless a separate explicit policy decision changes this. Reply exclusion must not silently disable safety monitoring or erase evidence.
 - Make exclusion reversible. The dashboard should show who is excluded, the reason, who/what added the exclusion, when it was added, and allow a moderator to remove it.
 - Prefer the stable platform-supplied user/channel ID as the exclusion key. Store display name/handle as a label only because names can change or collide. If there is no stable ID in the incoming JSON, use a clearly marked fallback key and do not claim identity certainty.
-- An AI can suggest “repeated antagonist / do-not-surface candidate” based on supplied evidence, but ambiguous or subjective cases should be reviewable. Do not permanently exclude a user solely because they express a bearish/bullish view, disagree respectfully, criticize the creator or ask a challenging good-faith question.
-- Clear, repeated bait/harassment can be marked by a moderator or by a high-confidence proposed workflow. The owner should be able to add/remove exclusions manually.
+- When the moderation/classification workflow identifies a user as a **high-confidence repeated-antagonist or ban candidate**, automatically add them to the Reply Finder exclusion list so their messages stop consuming Reply Finder tokens and do not appear in the host's attention queue. This is a reply-queue exclusion, **not an automatic ban**.
+- Ambiguous/low-confidence cases should be flagged for review instead of automatically excluded. Never exclude a user solely because they express a bearish/bullish view, disagree respectfully, criticize the creator or ask a challenging good-faith question.
+- The owner should be able to add/remove exclusions manually, and reverse an automatic exclusion if it was a false positive. Record the reason, supporting incident references, confidence, source of the decision (AI or manual), and timestamp.
 - Do not infer cross-account identity or apply one person's exclusion to a different account without reliable linking evidence.
 
 ### Pipeline sketch
