@@ -434,3 +434,44 @@ Validation must check that medium/hard suggestions contain exactly two sentences
 - the internal mute expires at the current session boundary unless the user is shielded again in a later session.
 
 Tests must inspect the actual serialized Reply Finder request and confirm that shielded users' messages are absent, while confirming the user can still chat and the moderation path is not inadvertently bypassed.
+
+
+## Past Videos Cleanup — scan last 20 uploads for negative comments about creator/content (decision: 2026-10-24)
+
+Add a separate dashboard tool called **Past Videos Cleanup**. Its purpose is to inspect comments on the channel's 20 most recently uploaded videos and remove comments that are negative specifically about the creator or the creator's content. This is a historical comment-cleanup workflow, separate from live Session Shield and separate from the future Active Moderation ban lever.
+
+### Scope and target classification
+- Identify the channel's latest 20 uploaded videos from the authenticated channel's uploads playlist, ordered newest first.
+- Retrieve their comment threads and replies where accessible, with pagination; don't assume a thread response contains every reply.
+- Classify each comment's sentiment and target separately. Targets should include `CREATOR`, `CONTENT`, `CREATOR_AND_CONTENT`, `OTHER_TARGET`, and `UNCERTAIN`.
+- The cleanup target is negative/hostile sentiment aimed at the creator, the videos/lessons, or both. It must not sweep up comments that are negative about an unrelated market event, a third party, a ticker, a broker, or another viewer.
+- Return the exact comment ID, video ID/title, author channel ID/display name if supplied, original comment text, parent/thread context where relevant, target classification, sentiment, confidence and a concise reason.
+- Comments whose target or tone is ambiguous should be placed in an uncertain/review bucket, not silently deleted.
+- Because the requested policy is about negative comments regarding the creator/content, the classifier must evaluate the intended target rather than simply deleting every message that contains a negative word. Use a configurable strictness setting during evaluation and test examples such as “this explanation is useless”, a respectful correction, a personal insult, negative market commentary, satire, and criticism directed at another commenter.
+- Never invent comment IDs, author IDs, or evidence.
+
+### Deletion workflow and safety
+- The tool's intended outcome is removal of qualifying negative comments about the creator/content through the channel owner's authorized YouTube account.
+- First version defaults to **scan and preview**: show counts by video, all proposed deletions, confidence and reason, then let the owner approve individual items or an explicitly confirmed bulk set. Do not silently delete comments during the first scan.
+- After the classifier has been validated, an owner-controlled **auto-delete high-confidence matches** option may be offered as a separate explicit setting. Uncertain/low-confidence candidates remain in review. The setting must be off by default.
+- Deletion is separate from live moderation: the live Session Shield mode still does not ban, mute, timeout or delete live chat messages. User-started historical cleanup can delete selected/approved past-video comments through its own clearly labelled workflow.
+- Record a deletion audit entry with comment ID, video ID, author ID where available, classification, confidence, decision source (manual or approved auto-delete), timestamp, API result and any error. Do not store unnecessary personal data indefinitely.
+- Handle API failures, already-deleted comments, disabled comments, permission errors and quota limits gracefully; show partial completion rather than claiming all comments were removed.
+- Use the least necessary OAuth scopes and only delete comments the authenticated channel owner has authority to delete. Confirm needed scopes, quotas and API semantics during implementation.
+- Provide progress and a post-run summary: videos scanned, total comments inspected, qualifying candidates, deleted count, skipped/uncertain count, failures, and estimated API quota usage.
+
+### YouTube API implementation notes to verify during coding
+- The YouTube Data API can enumerate uploads via the channel's uploads playlist and `playlistItems.list`.
+- Retrieve comments using `commentThreads.list` for each video with pagination. Fetch full replies through `comments.list` when the thread payload doesn't include every reply.
+- Delete an individual comment using `comments.delete` with the exact comment ID and appropriate OAuth authorization (official docs currently list `youtube.force-ssl` as a required scope for deletion).
+- The official API currently lists a quota cost of 50 units per `comments.delete` call and 1 unit per `playlistItems.list` call. Confirm current quota details before launch; don't assume quota cost is zero.
+- Do not use the unsupported `comments.markAsSpam` method.
+
+### Tests / release checks
+- Verify the exact newest 20 video IDs and ensure pagination/ordering is correct.
+- Test top-level comments and replies, duplicate pages, disabled comments, missing user IDs, and API permission/quota failures.
+- Test target specificity: negative about creator/content is a candidate; negative about unrelated markets/people is not.
+- Test sarcasm, respectful criticism, mixed/ambiguous sentiment, and comments quoting another person.
+- Ensure preview mode performs zero deletion calls.
+- Ensure auto-delete is off by default, requires explicit enabling and only deletes high-confidence, correctly targeted matches.
+- Ensure this tool does not change Session Shield state, strikes or future ban policy.
