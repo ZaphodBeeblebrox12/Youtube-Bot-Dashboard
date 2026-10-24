@@ -676,7 +676,7 @@ A live-chat queue slice and an initial Streamlit control panel have been added o
 
 ### Known limitations / next implementation
 - No YouTube OAuth or actual live chat ingestion is connected.
-- No YouTube OAuth or actual live chat ingestion is connected, so the worker waits until another source persists active-session messages.
+- An authenticated normalized-JSON ingestion endpoint now accepts messages from a trusted external chat source. Direct YouTube OAuth/live chat polling is not yet connected, so a source must post normalized JSON to the endpoint for the worker to receive messages.
 - Provider prompt caching is not implemented. Token usage (including cached-input usage if reported by the adapter) is recorded for later cost comparison.
 - The worker currently processes provider calls sequentially. Concurrency/rate-limit tuning and PostgreSQL `FOR UPDATE SKIP LOCKED` or equivalent leases are future hardening tasks.
 - The 2-second window is enforced by a polling worker; verify real-world latency and provider rate limits before depending on it live.
@@ -704,3 +704,16 @@ Implementation has progressed from queue scaffolding to a provider-call worker:
 **Execution caveat:** the repository environment in this session cannot clone GitHub due DNS/network restrictions, and GitHub status queries have not returned workflow checks. Tests have been authored for provider response validation and the automatic Session Shield flow, but their passing status remains unverified here. Do not treat them as a passing CI run until logs confirm it. Provider adapters have not yet been verified with real API keys, and the worker does not ingest YouTube messages on its own.
 
 Active Moderation remains off. The provider worker only classifies and writes internal results; it has no enforcement adapter.
+
+
+## Authenticated JSON ingest checkpoint (2026-10-25)
+
+- `src/youtube_bot_dashboard/ingest_api.py` adds a FastAPI endpoint `POST /api/v1/live/ingest` for a trusted external source to send a normalized JSON batch. It requires the `X-Ingest-Key` header matched against `INGEST_API_KEY`; without a configured secret, ingestion is disabled.
+- The request includes `session_id`, optional YouTube `live_chat_id` / `broadcast_id`, and 1–250 messages containing message ID, optional user channel ID/display name, text and timestamp. The API creates the session record when needed and uses the same idempotent storage/queue function as the worker.
+- `POST /api/v1/live/sessions/{session_id}/end` closes the session and expires its Session Shield records. `GET /health` is a liveness endpoint and exposes no credentials/content.
+- Responses summarize accepted, newly created, duplicate and Session Shield-excluded message counts. Incoming text remains untrusted. The endpoint does not call YouTube moderation APIs.
+- `.env.example` now lists `INGEST_API_KEY` as a variable name only. Set a long random secret in the runtime environment; do not commit it. Bind the service to localhost for local integrations, or place it behind HTTPS and authentication when a remote listener must access it.
+- Tests were added for creation of both independent pipelines, duplicate ingest, and Session Shield filtering.
+
+### Current API/integration boundary
+The API is a normalized JSON ingestion bridge, not a direct YouTube client. It does not discover streams, authenticate with YouTube, poll `liveChatMessages.list`, or handle OAuth tokens. That direct connector remains a future task. GitHub status queries still return no reported test checks, and tests have not been run in this environment because the local Git clone could not resolve github.com; verify the Actions logs or run the suite in a connected environment before relying on it.
