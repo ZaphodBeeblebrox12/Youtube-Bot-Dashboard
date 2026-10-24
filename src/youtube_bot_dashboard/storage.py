@@ -140,7 +140,6 @@ def create_schema(engine: Engine) -> None:
     should use versioned migrations rather than create_all.
     """
     from youtube_bot_dashboard import live_queue as _live_queue  # noqa: F401
-    from youtube_bot_dashboard import models_comment_cleanup as _comment_cleanup  # noqa: F401
 
     Base.metadata.create_all(engine)
 
