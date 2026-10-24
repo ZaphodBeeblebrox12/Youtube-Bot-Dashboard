@@ -12,7 +12,7 @@ A private livestream co-pilot that filters chat into a curated answer queue, whi
 
 The first implementation slice is a deterministic policy gate around AI classifications. It separates target, sentiment, and conduct type. Negative sentiment alone is never enough to propose deletion. Genuine criticism such as "This lesson is terrible and your explanation makes no sense" is kept by default. High-confidence personal abuse or another explicitly mapped violation can become a deletion candidate, but still requires owner approval.
 
-The initial Streamlit panel and live-queue data model are scaffolding only. YouTube OAuth, live ingestion, Gemini/Qwen API calls, provider prompt caching and actual deletion are not connected yet. No YouTube ban/mute/timeout/delete action is made by the live Session Shield path.
+The initial Streamlit panel, durable live queue, worker, and optional Gemini/Qwen provider adapters are in place. YouTube OAuth/live chat ingestion, provider-specific prompt caching, PostgreSQL production migrations, and historical comment deletion calls are not connected yet. No YouTube ban/mute/timeout/delete action is made by the live Session Shield path.
 
 ## Development
 
@@ -21,9 +21,11 @@ Requires Python 3.11 or newer.
 ```bash
 python -m venv .venv
 source .venv/bin/activate  # Windows: .venv\Scripts\activate
-python -m pip install -e ".[dev]"
+python -m pip install -e ".[dev,ai]"
 pytest
 streamlit run app.py
+# in a second terminal, start the live queue worker
+python -m youtube_bot_dashboard.live_worker
 ```
 
 ## Current implementation status
@@ -41,8 +43,10 @@ streamlit run app.py
 - [x] Live moderation and Reply Finder system-prompt templates
 - [ ] PostgreSQL production configuration, migrations, and concurrency hardening
 - [ ] YouTube OAuth and live chat ingestion
-- [ ] Background worker and Gemini/Qwen provider adapters with response-schema validation
-- [ ] Provider-specific token counting/prompt caching and usage reconciliation
+- [x] Background worker and Gemini/Qwen provider adapters with response-schema validation
+- [x] Environment-based provider registry (model IDs/API credentials supplied outside source)
+- [ ] YouTube OAuth and live chat ingestion to populate the live queue
+- [ ] Provider-specific prompt caching and usage reconciliation
 - [ ] Fully implemented private Reply Finder card UI and two-sentence answer briefs
 - [ ] Preview/approval-based comment deletion integration
 - [ ] Active Moderation enforcement (future phase only)
