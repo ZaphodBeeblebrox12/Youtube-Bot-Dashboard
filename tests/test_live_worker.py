@@ -394,3 +394,86 @@ def test_community_memory_candidate_is_bounded_and_requires_stable_identity():
     assert _normalize_community_memory(candidate, {"user_id": None})["save_candidate"] is False
     assert _normalize_community_memory({**candidate, "confidence": 0.79}, source)["save_candidate"] is False
     assert _normalize_community_memory({**candidate, "memory_type": "BANK_BALANCE"}, source)["save_candidate"] is False
+
+
+class FakeCommunityMemoryProvider:
+    provider_name = "GEMINI"
+    model_id = "gemini-memory-test-model"
+
+    def generate_json(self, *, system_prompt, payload):
+        message = payload["messages"][0]
+        return ProviderResponse(
+            text=json.dumps({
+                "selected_messages": [{
+                    "message_id": message["message_id"],
+                    "question_type": "HELP_REQUEST",
+                    "ease_to_answer": "MODERATE",
+                    "trading_stance": "NOT_APPLICABLE",
+                    "priority": "HIGH",
+                    "selection_reason": "The viewer explains an ongoing learning challenge.",
+                    "suggested_answer_angle": None,
+                    "suggested_live_response": "It is common to enter too early even when a level looks clear. Compare the entry trigger with the invalidation point and review whether waiting for confirmation would help.",
+                    "needs_research": False,
+                    "confidence": 0.95,
+                    "cluster_message_ids": [message["message_id"]],
+                    "community_memory": {
+                        "save_candidate": True,
+                        "memory_type": "CHALLENGE",
+                        "summary": "Often enters too early after identifying support",
+                        "suggested_follow_up": "Has waiting for confirmation helped with your entries?",
+                        "confidence": 0.94,
+                    },
+                }]
+            }),
+            model_id=self.model_id,
+            input_tokens=260,
+            output_tokens=95,
+        )
+
+
+def test_reply_finder_creates_owner_reviewable_community_memory_suggestion():
+    from sqlalchemy import select
+    from youtube_bot_dashboard.community_memory import CommunityMemory
+
+    engine, factory = create_engine_and_sessions("sqlite://")
+    create_schema(engine)
+    try:
+        now = datetime(2026, 10, 25, tzinfo=timezone.utc)
+        config = LiveQueueConfig(
+            batch_delay_seconds=2,
+            provider_strategy=ProviderStrategy.GEMINI_ONLY,
+            enabled_providers=(ProviderName.GEMINI,),
+        )
+        with factory() as session:
+            register_live_session(session, session_id="session-1", live_chat_id="chat-1")
+            ingest_live_message(
+                session,
+                IncomingLiveMessage(
+                    message_id="m-memory",
+                    session_id="session-1",
+                    text="I know support levels but keep entering too early.",
+                    user_channel_id="channel-meaningful",
+                    username="Asha",
+                ),
+                received_at=now,
+            )
+            batch = prepare_due_batch(
+                session,
+                session_id="session-1",
+                pipeline=LivePipeline.REPLY_FINDER,
+                config=config,
+                now=now + timedelta(seconds=3),
+            )
+            session.commit()
+        registry = ProviderRegistry({ProviderName.GEMINI: FakeCommunityMemoryProvider()})
+        outcome = process_prepared_batch(factory, batch.batch_id, registry, config)
+        assert outcome["status"] == "COMPLETED"
+        assert len(outcome["community_memory_suggestion_ids"]) == 1
+        with factory() as session:
+            memories = list(session.scalars(select(CommunityMemory)))
+            assert len(memories) == 1
+            assert memories[0].status == "SUGGESTED"
+            assert memories[0].user_channel_id == "channel-meaningful"
+            assert memories[0].summary == "Often enters too early after identifying support"
+    finally:
+        engine.dispose()
