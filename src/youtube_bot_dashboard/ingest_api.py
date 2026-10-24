@@ -15,6 +15,7 @@ from typing import Annotated
 
 from fastapi import Depends, FastAPI, Header, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field
+from dotenv import load_dotenv
 
 from youtube_bot_dashboard.live_queue import (
     IncomingLiveMessage,
@@ -24,6 +25,8 @@ from youtube_bot_dashboard.live_queue import (
     register_live_session,
 )
 from youtube_bot_dashboard.storage import create_engine_and_sessions, create_schema
+
+load_dotenv()
 
 app = FastAPI(
     title="YouTube Bot Dashboard Ingest API",
