@@ -12,7 +12,7 @@ A private livestream co-pilot that filters chat into a curated answer queue, whi
 
 The first implementation slice is a deterministic policy gate around AI classifications. It separates target, sentiment, and conduct type. Negative sentiment alone is never enough to propose deletion. Genuine criticism such as "This lesson is terrible and your explanation makes no sense" is kept by default. High-confidence personal abuse or another explicitly mapped violation can become a deletion candidate, but still requires owner approval.
 
-The initial Streamlit panel, durable live queue, worker, and optional Gemini/Qwen provider adapters are in place. YouTube OAuth/live chat ingestion, provider-specific prompt caching, PostgreSQL production migrations, and historical comment deletion calls are not connected yet. No YouTube ban/mute/timeout/delete action is made by the live Session Shield path.
+The initial Streamlit panel, durable live queue, worker, optional Gemini/Qwen provider adapters, and an authenticated JSON ingestion endpoint are in place. Direct YouTube OAuth/live chat polling, provider-specific prompt caching, PostgreSQL production migrations, and historical comment deletion calls are not connected yet. No YouTube ban/mute/timeout/delete action is made by the live Session Shield path.
 
 ## Development
 
@@ -24,7 +24,9 @@ source .venv/bin/activate  # Windows: .venv\Scripts\activate
 python -m pip install -e ".[dev,ai]"
 pytest
 streamlit run app.py
-# in a second terminal, start the live queue worker
+# in a second terminal, accept normalized chat JSON from a trusted source
+uvicorn youtube_bot_dashboard.ingest_api:app --host 127.0.0.1 --port 8000
+# in a third terminal, start the live queue worker
 python -m youtube_bot_dashboard.live_worker
 ```
 
@@ -45,7 +47,8 @@ python -m youtube_bot_dashboard.live_worker
 - [ ] YouTube OAuth and live chat ingestion
 - [x] Background worker and Gemini/Qwen provider adapters with response-schema validation
 - [x] Environment-based provider registry (model IDs/API credentials supplied outside source)
-- [ ] YouTube OAuth and live chat ingestion to populate the live queue
+- [x] Authenticated normalized-JSON ingestion endpoint for a trusted chat source
+- [ ] YouTube OAuth and direct live chat polling to populate the ingestion endpoint
 - [ ] Provider-specific prompt caching and usage reconciliation
 - [ ] Fully implemented private Reply Finder card UI and two-sentence answer briefs
 - [ ] Preview/approval-based comment deletion integration
