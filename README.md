@@ -64,7 +64,7 @@ The project decision log in `docs/PROJECT_DECISIONS.md` is the source of truth f
 
 **Poll permissions:** YouTube poll insertion and closing use `liveChatMessages.insert` and `liveChatMessages.transition`. These actions require `https://www.googleapis.com/auth/youtube.force-ssl` (or the documented `youtube` scope); the dashboard invokes them only when you click Launch or End. YouTube's API allows one active poll per chat. Draft preview is local and never sends anything to YouTube.
 
-**Verification:** GitHub Actions run [40127347324](https://github.com/ZaphodBeeblebrox12/Youtube-Bot-Dashboard/actions/runs/40127347324) passed **67 tests in 2.98 seconds** on commit `72f311456e6c307ea658dc7773c611eeb42f6c1a`. This is automated test coverage, not a live YouTube OAuth/broadcast smoke test.
+**Verification:** GitHub Actions run [40127947575](https://github.com/ZaphodBeeblebrox12/Youtube-Bot-Dashboard/actions/runs/40127947575) passed **73 tests in 2.89 seconds**, including mocked poll lifecycle tests. This is automated coverage, not a live YouTube OAuth/broadcast smoke test.
 
 
 ## External JSON source format
