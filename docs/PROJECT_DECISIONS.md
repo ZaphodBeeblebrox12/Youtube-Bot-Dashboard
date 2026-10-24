@@ -207,3 +207,51 @@ Default to a curated queue ordered by high live-response priority first, then EA
 - Abusive, threatening, scam or spam messages must not be placed in the ordinary reply queue merely because they contain a question or market opinion.
 - The dashboard should not state a trade is objectively bullish/bearish; it labels the stance expressed by the commenter, based on the supplied words.
 - Test clear bullish/bearish opinions, questions with no directional stance, mixed conditional opinions, non-trading comments, sarcastic/ambiguous messages, useful criticism, abusive bait, difficult multi-part questions and repeated questions.
+
+
+## AI answer assistance for difficult, general-finance and macro questions (decision: 2026-10-24)
+
+The product goal is that the owner should not need to open or read YouTube chat at all. Routine review, message selection, context, classification, and private answer preparation should happen in this dashboard. The owner reads a selected message here and responds verbally on the live stream. The dashboard does not post a reply to YouTube unless a separate, explicit future decision adds that capability.
+
+### Two kinds of answer assistance
+
+1. **Creator-specific / trading-setup questions:** Help identify the question and suggest a response angle that respects the owner's actual trading methodology. Do not invent rules or attribute a trading opinion/setup to the owner unless it is documented in supplied project knowledge.
+2. **General finance / macroeconomics / markets questions:** For hard questions that do not depend on the owner's own trading setup, provide an AI-generated answer brief that helps the host answer accurately live. It can cover macroeconomic concepts, market structure, interest rates, inflation, central banks, currencies, bonds, commodities, financial terminology, and general financial education.
+
+### Answer brief fields
+
+For each selected question, the private dashboard may show:
+- **Question type:** creator-specific/setup, general finance, macroeconomics, current-events/current-market, or unclear.
+- **Difficulty:** EASY / MODERATE / DIFFICULT.
+- **Short answer:** a concise, plain-English answer the host can say out loud.
+- **Key points:** up to 3–5 bullets or a short outline supporting the answer.
+- **Suggested live phrasing:** a natural, conversational response, clearly marked as a draft for the host to adapt.
+- **Caveats / uncertainty:** what depends on assumptions, jurisdiction, time horizon, missing context, or unsettled evidence.
+- **Evidence / sources:** for time-sensitive, disputed, regulatory, or factual claims where source-backed research is needed, show reliable sources and links in the dashboard. Distinguish sourced facts from interpretation.
+- **Confidence / review flag:** lower confidence or flag for follow-up if the question needs specialist expertise, current research, personal financial advice, or facts that cannot be verified.
+
+### Research and accuracy rules
+
+- Avoid fabricated facts, citations, market data or certainty. Never present a made-up source.
+- Use retrieval/search for questions involving current macro releases, central-bank decisions, current prices, current regulations or other fast-changing facts; show the source date and links in the dashboard when available.
+- Stable conceptual questions can be answered from model knowledge, but the brief should still state assumptions when needed.
+- Prefer authoritative primary sources for economic releases and policy statements, regulator/official sources for rules, and reputable research for broader context. If sources disagree, indicate the disagreement.
+- Separate explanation from prediction. Never turn a viewer's question into a confident market forecast without evidence.
+- Avoid giving individualized financial advice based on an incomplete viewer message. For investment-related questions, provide balanced educational framing and surface risk/context rather than pretending there is one universally correct recommendation.
+- If a question is ambiguous, show a short clarifying question or a conditional answer instead of silently guessing.
+- The AI answer brief is private assistance for the host; it is not automatically posted or spoken verbatim. The host remains responsible for what they say live.
+
+### Live-stream UX requirement
+
+The dashboard should remain the single work surface:
+- ingest and process chat in the background;
+- show only curated, vetted messages by default;
+- show the selected message and the answer brief together, without sending the host to YouTube chat;
+- allow Next, Answered, Skip/Dismiss, and Save for later;
+- make source links available in the dashboard for hard/research-dependent questions;
+- keep raw chat/logs out of the normal live screen, accessible only through a deliberate separate troubleshooting/audit view;
+- never auto-publish generated replies.
+
+### Validation scenarios
+
+Test straightforward educational questions, hard macro questions, current central-bank/economic questions, creator-specific trading-method questions, questions requiring current sources, ambiguous questions, personalized investing requests, disputed claims, and questions for which reliable evidence cannot be found. Measure factuality and citation quality separately from whether the question is worth surfacing.
