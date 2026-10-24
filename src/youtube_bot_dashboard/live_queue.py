@@ -2,7 +2,7 @@
 
 This module does not make network calls. A worker prepares a due batch, marks it
 sent, invokes the selected provider adapter, then stores the validated response.
-Session Shield only filters the Reply Finder pipeline; moderation stays separate.
+Session Shield excludes a blacklisted viewer from both AI pipelines for the rest of the live session.
 """
 
 from __future__ import annotations
@@ -15,6 +15,7 @@ import math
 import uuid
 
 from sqlalchemy import (
+    BigInteger,
     Boolean,
     DateTime,
     ForeignKey,
@@ -144,6 +145,11 @@ class LiveMessageRecord(Base):
     user_channel_id: Mapped[str | None] = mapped_column(String(120), nullable=True, index=True)
     username: Mapped[str | None] = mapped_column(String(300), nullable=True)
     text: Mapped[str] = mapped_column(Text, nullable=False)
+    is_super_chat: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    super_chat_amount_micros: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    super_chat_currency: Mapped[str | None] = mapped_column(String(3), nullable=True)
+    super_chat_amount_display: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    super_chat_tier: Mapped[int | None] = mapped_column(Integer, nullable=True)
     content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
@@ -218,12 +224,29 @@ class IncomingLiveMessage:
     username: str | None = None
     is_member: bool | None = None
     published_at: datetime | None = None
+    is_super_chat: bool = False
+    super_chat_amount_micros: int | None = None
+    super_chat_currency: str | None = None
+    super_chat_amount_display: str | None = None
+    super_chat_tier: int | None = None
 
     def __post_init__(self) -> None:
         if not self.message_id.strip():
             raise ValueError("message_id must not be empty")
         if not self.session_id.strip():
             raise ValueError("session_id must not be empty")
+        if self.super_chat_amount_micros is not None and (
+            isinstance(self.super_chat_amount_micros, bool) or self.super_chat_amount_micros < 0
+        ):
+            raise ValueError("super_chat_amount_micros must be a non-negative integer")
+        if self.super_chat_currency is not None and len(self.super_chat_currency) > 3:
+            raise ValueError("super_chat_currency must be at most three characters")
+        if self.super_chat_amount_display is not None and len(self.super_chat_amount_display) > 64:
+            raise ValueError("super_chat_amount_display must be at most 64 characters")
+        if self.super_chat_tier is not None and (
+            isinstance(self.super_chat_tier, bool) or self.super_chat_tier < 0
+        ):
+            raise ValueError("super_chat_tier must be a non-negative integer")
 
 
 @dataclass(frozen=True, slots=True)
@@ -357,7 +380,7 @@ def shield_user_for_session(
     display_name: str | None = None,
     created_by: str | None = None,
 ) -> SessionShieldRecord:
-    """Internally exclude a user from Reply Finder; never call YouTube mute APIs."""
+    """Exclude a shielded user from both AI pipelines; never call YouTube enforcement APIs."""
     if not user_channel_id.strip():
         raise ValueError("user_channel_id must not be empty")
     if not reason.strip():
@@ -392,11 +415,15 @@ def shield_user_for_session(
         existing.created_by = created_by or existing.created_by
     session.flush()
 
-    # Drop all unsent Reply Finder tasks from the payload path. If a batch was
-    # prepared but not sent, scrub the message from the serialized request too.
+    # Exclude unprocessed messages from both AI pipelines. Keep completed moderation
+    # results as audit records for the message that triggered the shield, but hide
+    # completed Reply Finder cards. Scrub prepared-but-unsent requests too.
     tasks = list(session.scalars(select(LiveMessageTask).where(
         LiveMessageTask.session_id == session_id,
-        LiveMessageTask.pipeline == LivePipeline.REPLY_FINDER.value,
+        LiveMessageTask.pipeline.in_([
+            LivePipeline.MODERATION.value,
+            LivePipeline.REPLY_FINDER.value,
+        ]),
         LiveMessageTask.state.in_([
             TaskState.PENDING.value,
             TaskState.BATCHED.value,
@@ -407,27 +434,32 @@ def shield_user_for_session(
     )))
     for task in tasks:
         message = session.get(LiveMessageRecord, task.message_id)
-        if message and message.user_channel_id == user_channel_id:
-            batch = session.get(LiveAIRequestBatch, task.batch_id) if task.batch_id else None
-            if batch and batch.status == BatchState.PREPARED.value:
-                try:
-                    payload = json.loads(batch.payload_json)
-                    payload["messages"] = [
-                        item for item in payload.get("messages", [])
-                        if item.get("message_id") != task.message_id
-                    ]
-                    batch.payload_json = json.dumps(payload, ensure_ascii=False)
-                    if not payload["messages"]:
-                        batch.status = BatchState.CANCELLED.value
-                except (TypeError, json.JSONDecodeError):
+        if not message or message.user_channel_id != user_channel_id:
+            continue
+        if task.pipeline == LivePipeline.MODERATION.value and task.state == TaskState.COMPLETED.value:
+            continue
+
+        batch = session.get(LiveAIRequestBatch, task.batch_id) if task.batch_id else None
+        if batch and batch.status == BatchState.PREPARED.value:
+            try:
+                payload = json.loads(batch.payload_json)
+                payload["messages"] = [
+                    item for item in payload.get("messages", [])
+                    if item.get("message_id") != task.message_id
+                ]
+                batch.payload_json = json.dumps(payload, ensure_ascii=False)
+                if not payload["messages"]:
                     batch.status = BatchState.CANCELLED.value
-            # Also remove any still-queued/completed candidate from the private
-            # screen. The historical request/response remains in the audit record.
-            task.state = TaskState.EXCLUDED_SHIELDED.value
-            task.batch_id = None
-            task.provider = None
-            task.result_json = None
-            task.last_error = "Excluded by Session Shield from Reply Finder until this session ends."
+            except (TypeError, json.JSONDecodeError):
+                batch.status = BatchState.CANCELLED.value
+
+        # Already-dispatched provider calls cannot be recalled; ignore their
+        # result and ensure no later request is dispatched for this user.
+        task.state = TaskState.EXCLUDED_SHIELDED.value
+        task.batch_id = None
+        task.provider = None
+        task.result_json = None
+        task.last_error = "Excluded by Session Shield from all AI pipelines until this session ends."
     session.flush()
     return existing
 
@@ -474,6 +506,16 @@ def ingest_live_message(
             # prevent stale content being submitted on a still-pending task.
             existing.text = incoming.text
             existing.content_hash = digest
+        if incoming.is_super_chat:
+            existing.is_super_chat = True
+        if incoming.super_chat_amount_micros is not None:
+            existing.super_chat_amount_micros = incoming.super_chat_amount_micros
+        if incoming.super_chat_currency is not None:
+            existing.super_chat_currency = incoming.super_chat_currency
+        if incoming.super_chat_amount_display is not None:
+            existing.super_chat_amount_display = incoming.super_chat_amount_display
+        if incoming.super_chat_tier is not None:
+            existing.super_chat_tier = incoming.super_chat_tier
         existing.last_seen_at = now
         session.flush()
         tasks = list(session.scalars(select(LiveMessageTask).where(
@@ -491,6 +533,11 @@ def ingest_live_message(
         user_channel_id=incoming.user_channel_id,
         username=incoming.username,
         text=incoming.text,
+        is_super_chat=incoming.is_super_chat,
+        super_chat_amount_micros=incoming.super_chat_amount_micros,
+        super_chat_currency=incoming.super_chat_currency,
+        super_chat_amount_display=incoming.super_chat_amount_display,
+        super_chat_tier=incoming.super_chat_tier,
         content_hash=digest,
         published_at=incoming.published_at,
         first_seen_at=now,
@@ -507,19 +554,24 @@ def ingest_live_message(
         observed_at=now,
     )
 
+    excluded = is_user_shielded(
+        session, session_id=incoming.session_id, user_channel_id=incoming.user_channel_id
+    )
+    excluded_reason = (
+        "Excluded by Session Shield before any AI request; no message text sent to a provider."
+        if excluded else None
+    )
     mod_task = LiveMessageTask(
         message_id=incoming.message_id,
         session_id=incoming.session_id,
         pipeline=LivePipeline.MODERATION.value,
         content_hash=digest,
-        state=TaskState.PENDING.value,
+        state=TaskState.EXCLUDED_SHIELDED.value if excluded else TaskState.PENDING.value,
         queued_at=now,
+        last_error=excluded_reason,
     )
     session.add(mod_task)
 
-    excluded = is_user_shielded(
-        session, session_id=incoming.session_id, user_channel_id=incoming.user_channel_id
-    )
     reply_task = LiveMessageTask(
         message_id=incoming.message_id,
         session_id=incoming.session_id,
@@ -527,7 +579,7 @@ def ingest_live_message(
         content_hash=digest,
         state=TaskState.EXCLUDED_SHIELDED.value if excluded else TaskState.PENDING.value,
         queued_at=now,
-        last_error="Excluded by Session Shield before Reply Finder request." if excluded else None,
+        last_error=excluded_reason,
     )
     session.add(reply_task)
     session.flush()
@@ -599,33 +651,45 @@ def prepare_due_batch(
     """
     timestamp = now or utc_now()
 
-    tasks = list(session.scalars(select(LiveMessageTask).where(
-        LiveMessageTask.session_id == session_id,
-        LiveMessageTask.pipeline == pipeline.value,
-        LiveMessageTask.state.in_([TaskState.PENDING.value, TaskState.FAILED_RETRYABLE.value]),
-        (LiveMessageTask.next_attempt_at.is_(None)) | (LiveMessageTask.next_attempt_at <= timestamp),
-    ).order_by(LiveMessageTask.queued_at, LiveMessageTask.id).limit(config.max_messages_per_batch)))
+    tasks = list(session.scalars(select(LiveMessageTask)
+        .join(LiveMessageRecord, LiveMessageRecord.message_id == LiveMessageTask.message_id)
+        .where(
+            LiveMessageTask.session_id == session_id,
+            LiveMessageTask.pipeline == pipeline.value,
+            LiveMessageTask.state.in_([TaskState.PENDING.value, TaskState.FAILED_RETRYABLE.value]),
+            (LiveMessageTask.next_attempt_at.is_(None)) | (LiveMessageTask.next_attempt_at <= timestamp),
+        )
+        .order_by(
+            LiveMessageRecord.is_super_chat.desc(),
+            LiveMessageTask.queued_at,
+            LiveMessageTask.id,
+        )
+        .limit(config.max_messages_per_batch)))
 
-    if pipeline is LivePipeline.REPLY_FINDER:
-        eligible = []
-        for task in tasks:
-            message = session.get(LiveMessageRecord, task.message_id)
-            if message and is_user_shielded(session, session_id=session_id, user_channel_id=message.user_channel_id):
-                task.state = TaskState.EXCLUDED_SHIELDED.value
-                task.batch_id = None
-                task.provider = None
-                task.last_error = "Excluded by Session Shield before Reply Finder request."
-            else:
-                eligible.append(task)
-        tasks = eligible
-        session.flush()
+    # Defensively apply Session Shield to both pipelines at request preparation.
+    eligible = []
+    for task in tasks:
+        message = session.get(LiveMessageRecord, task.message_id)
+        if message and is_user_shielded(session, session_id=session_id, user_channel_id=message.user_channel_id):
+            task.state = TaskState.EXCLUDED_SHIELDED.value
+            task.batch_id = None
+            task.provider = None
+            task.last_error = "Excluded by Session Shield before any AI request."
+        else:
+            eligible.append(task)
+    tasks = eligible
+    session.flush()
 
     if not tasks:
         return None
 
-    if not should_flush_batch(
+    # A pending Super Chat skips the normal collection delay but still needs
+    # the same AI safety check before appearing in the visible feed.
+    first_message = session.get(LiveMessageRecord, tasks[0].message_id)
+    has_super_chat = bool(first_message and first_message.is_super_chat)
+    if not has_super_chat and not should_flush_batch(
         pending_count=len(tasks),
-        oldest_queued_at=tasks[0].queued_at,
+        oldest_queued_at=min(task.queued_at for task in tasks),
         now=timestamp,
         config=config,
     ):
@@ -652,6 +716,13 @@ def prepare_due_batch(
             "published_at": message.published_at.isoformat() if message.published_at else None,
             "text": message.text,
         }
+        if pipeline is LivePipeline.REPLY_FINDER:
+            item.update({
+                "is_super_chat": bool(message.is_super_chat),
+                "super_chat_amount_display": message.super_chat_amount_display,
+                "super_chat_currency": message.super_chat_currency,
+                "super_chat_tier": message.super_chat_tier,
+            })
         candidate_payload = {**pending_payload, "messages": [*messages, item]}
         estimated_payload_tokens = estimate_message_tokens(candidate_payload)
         if estimated_payload_tokens > payload_budget:

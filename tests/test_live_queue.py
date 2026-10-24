@@ -47,13 +47,14 @@ def db():
         engine.dispose()
 
 
-def msg(message_id, user_id="channel-1", text=None):
+def msg(message_id, user_id="channel-1", text=None, **metadata):
     return IncomingLiveMessage(
         message_id=message_id,
         session_id="session-1",
         user_channel_id=user_id,
         username=user_id,
         text=text or f"Hello {message_id}",
+        **metadata,
     )
 
 
@@ -114,7 +115,7 @@ def test_duplicate_ingest_does_not_create_duplicate_tasks(db):
         assert len(list(session.scalars(select(LiveMessageTask).where(LiveMessageTask.message_id == "m-1")))) == 2
 
 
-def test_session_shield_filters_reply_finder_but_keeps_moderation(db):
+def test_session_shield_excludes_future_messages_from_both_ai_pipelines(db):
     _, factory = db
     with factory() as session:
         shield_user_for_session(
@@ -126,11 +127,16 @@ def test_session_shield_filters_reply_finder_but_keeps_moderation(db):
         tasks = list(session.scalars(select(LiveMessageTask).where(LiveMessageTask.message_id == "m-evil")))
         by_pipeline = {t.pipeline: t for t in tasks}
         assert result.reply_excluded_by_shield
-        assert by_pipeline["MODERATION"].state == TaskState.PENDING.value
+        assert by_pipeline["MODERATION"].state == TaskState.EXCLUDED_SHIELDED.value
         assert by_pipeline["REPLY_FINDER"].state == TaskState.EXCLUDED_SHIELDED.value
+        assert "no message text sent" in by_pipeline["MODERATION"].last_error.lower()
+        now = datetime(2026, 10, 25, tzinfo=timezone.utc) + timedelta(seconds=3)
+        config = LiveQueueConfig(batch_delay_seconds=0.1)
+        assert prepare_due_batch(session, session_id="session-1", pipeline=LivePipeline.MODERATION, config=config, now=now) is None
+        assert prepare_due_batch(session, session_id="session-1", pipeline=LivePipeline.REPLY_FINDER, config=config, now=now) is None
 
 
-def test_shielding_after_ingest_removes_reply_task_from_prepared_payload(db):
+def test_shielding_after_ingest_scrubs_prepared_batches_for_both_ai_pipelines(db):
     _, factory = db
     now = datetime(2026, 10, 25, tzinfo=timezone.utc)
     with factory() as session:
@@ -139,12 +145,15 @@ def test_shielding_after_ingest_removes_reply_task_from_prepared_payload(db):
         session.commit()
 
         config = LiveQueueConfig(batch_delay_seconds=2.0, max_messages_per_batch=100)
-        batch = prepare_due_batch(
-            session, session_id="session-1", pipeline=LivePipeline.REPLY_FINDER,
-            config=config, now=now + timedelta(seconds=3)
-        )
-        assert batch is not None
-        assert set(batch.message_ids) == {"m-1", "m-2"}
+        batches = {}
+        for pipeline in (LivePipeline.MODERATION, LivePipeline.REPLY_FINDER):
+            batch = prepare_due_batch(
+                session, session_id="session-1", pipeline=pipeline,
+                config=config, now=now + timedelta(seconds=3)
+            )
+            assert batch is not None
+            assert set(batch.message_ids) == {"m-1", "m-2"}
+            batches[pipeline] = batch
         session.commit()
 
         shield_user_for_session(
@@ -153,14 +162,48 @@ def test_shielding_after_ingest_removes_reply_task_from_prepared_payload(db):
         )
         session.commit()
 
-        stored_batch = session.get(LiveAIRequestBatch, batch.batch_id)
-        payload = json.loads(stored_batch.payload_json)
-        assert [m["message_id"] for m in payload["messages"]] == ["m-2"]
-        evil_task = session.scalar(select(LiveMessageTask).where(
-            LiveMessageTask.message_id == "m-1",
-            LiveMessageTask.pipeline == LivePipeline.REPLY_FINDER.value,
-        ))
-        assert evil_task.state == TaskState.EXCLUDED_SHIELDED.value
+        for pipeline, batch in batches.items():
+            stored_batch = session.get(LiveAIRequestBatch, batch.batch_id)
+            payload = json.loads(stored_batch.payload_json)
+            assert [m["message_id"] for m in payload["messages"]] == ["m-2"]
+            evil_task = session.scalar(select(LiveMessageTask).where(
+                LiveMessageTask.message_id == "m-1",
+                LiveMessageTask.pipeline == pipeline.value,
+            ))
+            assert evil_task.state == TaskState.EXCLUDED_SHIELDED.value
+
+
+def test_super_chat_metadata_is_persisted_and_prioritized_before_normal_batch_delay(db):
+    _, factory = db
+    now = datetime(2026, 10, 25, tzinfo=timezone.utc)
+    with factory() as session:
+        ingest_live_message(session, msg("ordinary"), received_at=now)
+        ingest_live_message(
+            session,
+            msg("paid", text="Thanks for the risk-management explanation!",
+                is_super_chat=True, super_chat_amount_micros=500_000_000,
+                super_chat_currency="INR", super_chat_amount_display="₹500.00",
+                super_chat_tier=2),
+            received_at=now + timedelta(milliseconds=250),
+        )
+        session.commit()
+
+        paid = session.get(LiveMessageRecord, "paid")
+        assert paid.is_super_chat
+        assert paid.super_chat_amount_micros == 500_000_000
+        assert paid.super_chat_currency == "INR"
+        assert paid.super_chat_amount_display == "₹500.00"
+        assert paid.super_chat_tier == 2
+
+        batch = prepare_due_batch(
+            session, session_id="session-1", pipeline=LivePipeline.REPLY_FINDER,
+            config=LiveQueueConfig(batch_delay_seconds=2.0),
+            now=now + timedelta(milliseconds=500),
+        )
+        assert batch is not None
+        assert batch.message_ids == ("paid", "ordinary")
+        assert batch.payload["messages"][0]["is_super_chat"] is True
+        assert batch.payload["messages"][0]["super_chat_amount_display"] == "₹500.00"
 
 
 def test_batch_waits_for_two_second_window_unless_full(db):
