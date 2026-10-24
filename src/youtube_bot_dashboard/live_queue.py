@@ -586,8 +586,6 @@ def prepare_due_batch(
     ):
         return None
 
-    provider = _select_next_provider(session, pipeline=pipeline, config=config)
-    batch_id = str(uuid.uuid4())
     messages = []
     claimed_tasks = []
     pending_payload = {
@@ -629,6 +627,8 @@ def prepare_due_batch(
         session.flush()
         return None
 
+    provider = _select_next_provider(session, pipeline=pipeline, config=config)
+    batch_id = str(uuid.uuid4())
     payload = {
         "session_id": session_id,
         "pipeline": pipeline.value,
