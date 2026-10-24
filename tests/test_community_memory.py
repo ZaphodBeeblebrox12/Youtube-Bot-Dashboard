@@ -49,8 +49,8 @@ def test_profile_tracks_first_seen_last_seen_and_distinct_sessions():
         with factory() as session:
             profile = session.get(CommunityViewerProfile, "channel-1")
             visits = list(session.scalars(select(CommunityViewerVisit).where(CommunityViewerVisit.user_channel_id == "channel-1")))
-            assert profile.first_seen_at == first
-            assert profile.last_seen_at == second
+            assert profile.first_seen_at.replace(tzinfo=timezone.utc) == first
+            assert profile.last_seen_at.replace(tzinfo=timezone.utc) == second
             assert profile.distinct_sessions_seen == 2
             assert profile.total_message_count == 3
             assert len(visits) == 2
