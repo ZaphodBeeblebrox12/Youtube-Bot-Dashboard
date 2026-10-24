@@ -70,6 +70,7 @@ class LiveQueueConfig:
     max_messages_per_batch: int = 100
     max_input_tokens: int = 12_000
     system_prompt_reserve_tokens: int = 3_000
+    session_shield_confidence_threshold: float = 0.90
     provider_strategy: ProviderStrategy = ProviderStrategy.ROUND_ROBIN
     enabled_providers: tuple[ProviderName, ...] = (ProviderName.GEMINI, ProviderName.QWEN)
     max_attempts: int = 3
@@ -84,6 +85,8 @@ class LiveQueueConfig:
             raise ValueError("max_input_tokens must be between 1000 and 100000")
         if not 0 <= self.system_prompt_reserve_tokens < self.max_input_tokens - 100:
             raise ValueError("system_prompt_reserve_tokens must leave at least 100 input tokens for messages")
+        if not math.isfinite(self.session_shield_confidence_threshold) or not 0 <= self.session_shield_confidence_threshold <= 1:
+            raise ValueError("session_shield_confidence_threshold must be between 0 and 1")
         if self.max_attempts < 1 or self.retry_base_seconds < 1:
             raise ValueError("retry settings must be positive")
         if not self.enabled_providers:
@@ -246,6 +249,7 @@ def get_live_queue_config(session: Session) -> LiveQueueConfig:
         max_messages_per_batch=int(get("live_max_messages_per_batch", "100")),
         max_input_tokens=int(get("live_max_input_tokens", "12000")),
         system_prompt_reserve_tokens=int(get("live_system_prompt_reserve_tokens", "3000")),
+        session_shield_confidence_threshold=float(get("live_session_shield_confidence_threshold", "0.90")),
         provider_strategy=ProviderStrategy(strategy_raw),
         enabled_providers=tuple(ProviderName(p) for p in providers_raw),
         max_attempts=int(get("live_max_attempts", "3")),
@@ -260,6 +264,7 @@ def update_live_queue_config(session: Session, config: LiveQueueConfig) -> None:
         "live_max_messages_per_batch": str(config.max_messages_per_batch),
         "live_max_input_tokens": str(config.max_input_tokens),
         "live_system_prompt_reserve_tokens": str(config.system_prompt_reserve_tokens),
+        "live_session_shield_confidence_threshold": str(config.session_shield_confidence_threshold),
         "live_provider_strategy": config.provider_strategy.value,
         "live_enabled_providers": json.dumps([p.value for p in config.enabled_providers]),
         "live_max_attempts": str(config.max_attempts),
