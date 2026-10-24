@@ -61,19 +61,19 @@ Batch summary includes counts assessed, likely violations and material input lim
 
 Proposed initial severity bands (not calibrated): 0 no violation; 1–19 very minor/borderline; 20–39 low; 40–59 moderate; 60–79 serious; 80–100 critical. Test and tune against labelled examples; severity alone never selects a ban duration.
 
-## Default escalation policy
+## Future ban policy (not enabled in initial mode)
 
-Name the first escalation stage **Level 1 — Session Timeout**.
+The following escalation ladder is a **future option**, not the initial launch behaviour. Initial launch mode must not issue YouTube bans, timeouts, or other enforcement actions.
 
-For confirmed qualifying offences by the same identifiable account:
-1. **Level 1 / first offence:** restriction lasts only until the current live chat/session ends. At the next session, the account is allowed again automatically if no new violation occurs.
-2. **Second qualifying offence:** 7-day ban.
-3. **Third qualifying offence:** 30-day ban.
-4. **Fourth qualifying offence:** permanent ban.
+If the owner later explicitly enables active enforcement, the planned ladder for confirmed qualifying offences by the same identifiable account is:
+1. First qualifying offence: restriction until the current live session ends.
+2. Second qualifying offence: 7-day ban.
+3. Third qualifying offence: 30-day ban.
+4. Fourth qualifying offence: permanent ban.
 
-The Level 1 restriction must expire at the actual session boundary; it must not accidentally become a permanent exclusion. Keep the offence/strike record after the timeout expires, because later confirmed offences escalate through the ladder. “Allowed again next session” means the old session-only restriction has expired; it does not erase offence history or protect new violations from escalation.
+If enabled in the future, session-based restrictions must expire at the actual session boundary. Confirmed offence records and supporting evidence remain available so later incidents can be escalated. Define session boundaries from the actual platform/stream lifecycle. Deduplicate incidents so one spam burst does not automatically become multiple offences. Provide moderator override and appeal handling before enabling live enforcement.
 
-The app must define session boundaries from the actual platform/stream lifecycle. Only the backend increments strikes. Deduplicate incidents so repeated messages within one spam burst do not automatically create multiple strikes. Keep evidence and reason for each action; provide moderator overrides and appeals, and handle overturned decisions in strike history.
+Do not activate this ladder from AI configuration alone. It requires an explicit owner-controlled enforcement-mode change, documented settings, and testing.
 
 Critical cases such as credible threats, doxxing or clear credential theft/scams should trigger urgent review and appropriate platform-supported protective action; they should not have to wait for four strikes. Exact critical auto-enforcement thresholds remain to be designed and validated.
 
@@ -310,7 +310,7 @@ The owner wants to keep the chat open, including antagonistic participants where
 - Add a user-level `reply_excluded` / “Do not surface in reply queue” state to the dashboard.
 - Before constructing the Reply Finder AI request, filter out messages from excluded users. Do not merely ask the model to ignore them after sending the messages; perform the exclusion in backend code before the API call to save input tokens.
 - Do not show excluded users' messages in the normal curated live queue. The host should not need to read them.
-- The exclusion applies to the Reply Finder/answer-assistance path only. **The moderation pipeline continues to screen incoming chat independently** for spam, threats, scams and other policy violations, unless a separate explicit policy decision changes this. Reply exclusion must not silently disable safety monitoring or erase evidence.
+- The exclusion applies to the Reply Finder/answer-assistance path only. **The moderation pipeline continues to screen incoming chat independently** for spam, threats, scams and other policy violations, and may record incidents/evidence. In the initial launch mode, this screening does not issue bans, timeouts, message deletions, or other punitive platform actions. Reply exclusion must not silently disable safety monitoring or erase evidence.
 - Make exclusion reversible. The dashboard should show who is excluded, the reason, who/what added the exclusion, when it was added, and allow a moderator to remove it.
 - Prefer the stable platform-supplied user/channel ID as the exclusion key. Store display name/handle as a label only because names can change or collide. If there is no stable ID in the incoming JSON, use a clearly marked fallback key and do not claim identity certainty.
 - When the moderation/classification workflow identifies a user as a **high-confidence repeated-antagonist or ban candidate**, automatically add them to the Reply Finder exclusion list for the **remainder of the current live session only**. This stops their messages consuming Reply Finder tokens and keeps them out of the host's attention queue. This is a reply-queue exclusion, **not by itself a platform ban**.
@@ -326,8 +326,18 @@ The owner wants to keep the chat open, including antagonistic participants where
 3. Backend checks each message's supplied stable user ID against the Reply Finder exclusion list.
 4. Only eligible messages are sent to the Reply Finder in token-budgeted batches.
 5. Selected messages are ranked and displayed in the private dashboard; excluded users never enter the ordinary reply queue.
+6. In the initial launch mode, moderation classifications are logged for review/analytics only. They do not issue YouTube bans, timeouts, deletes, or other punitive platform actions.
 
 ### Metrics and testing
 - Track counts/tokens for raw messages, messages excluded before Reply Finder, messages sent to each model, and approximate token/cost savings.
 - Test that excluded messages are absent from the serialized Reply Finder request (not just omitted from display), while the same messages still reach the moderation pipeline.
 - Test name changes for users with stable IDs, missing IDs, manual un-exclusion, and false-positive exclusions.
+
+
+## Explicit launch mode: Session Shield only (decision: 2026-10-24)
+
+**Initial mode is non-punitive. Session Shield is not a ban, timeout, chat restriction or deletion.** A user added to Session Shield remains able to participate in YouTube chat. The only immediate effect is that their messages are filtered out in backend code before they are sent to the Reply Finder, for the remainder of the current live session. At the next session boundary, they become eligible for the Reply Finder again unless they are flagged again in that new session.
+
+The initial version can detect and log likely rule violations, store supporting message evidence, identify repeat antagonism, and use that result to activate Session Shield. It must not call YouTube enforcement endpoints or apply punitive actions. Make this unmistakable in UI wording: “Excluded from reply suggestions until this session ends” rather than “banned”, “timed out” or “restricted”.
+
+Keep future active enforcement as a separate, disabled mode that the owner may choose to enable later as the channel grows. When building that future mode, include explicit settings and a confirmation step before any real sanctions are issued, plus dry-run/preview testing, audit logs, appeals and override mechanisms. The planned session / 7-day / 30-day / permanent escalation ladder belongs to that future mode only.
