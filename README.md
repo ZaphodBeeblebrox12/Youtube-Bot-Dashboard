@@ -1,6 +1,6 @@
 # YouTube Bot Dashboard
 
-A private, local-first livestream co-pilot with a curated answer queue and low-noise community memory. It keeps moderation, viewer recognition, and historical comment cleanup separate.
+A private, local-first livestream co-pilot with a curated answer queue, low-noise community memory, and owner-controlled YouTube live polls. It keeps moderation, viewer recognition, and historical comment cleanup separate.
 
 ## Safety levers
 
@@ -12,11 +12,11 @@ A private, local-first livestream co-pilot with a curated answer queue and low-n
 
 The first implementation slice is a deterministic policy gate around AI classifications. It separates target, sentiment, and conduct type. Negative sentiment alone is never enough to propose deletion. Genuine criticism such as "This lesson is terrible and your explanation makes no sense" is kept by default. High-confidence personal abuse or another explicitly mapped violation can become a deletion candidate, but still requires owner approval.
 
-The Streamlit panel, durable live queue, optional Gemini/Qwen adapters, authenticated JSON ingestion bridge, read-only YouTube OAuth setup, and direct `liveChatMessages.streamList` listener code are present. The direct connector still needs a real OAuth/active-broadcast test; it is not claimed as end-to-end verified. Provider-specific prompt caching, PostgreSQL production migrations, and historical comment deletion calls remain outstanding. Session Shield does not call YouTube ban/mute/timeout/delete APIs.
+The Streamlit panel, durable live queue, optional Gemini/Qwen adapters, authenticated JSON bridge, direct `liveChatMessages.streamList` listener, and Live Polls workspace are present. The poll workspace saves drafts offline, explicitly inserts a poll into a live chat, closes it, and saves YouTube's returned tallies. Direct OAuth and real-broadcast actions still need an owner-authorized smoke test; they are not claimed as end-to-end verified. Provider-specific prompt caching, PostgreSQL production migrations, and historical comment deletion calls remain outstanding. Session Shield does not call YouTube ban/mute/timeout/delete APIs.
 
 ## Development
 
-Requires Python 3.11 or newer. For local configuration, copy `.env.example` to `.env`, set a long random `INGEST_API_KEY`, and configure at least one AI provider. The `.env` file is ignored by Git.
+Requires Python 3.11 or newer. For local configuration, copy `.env.example` to `.env`, set a long random `INGEST_API_KEY`, configure at least one AI provider, and place a Google OAuth Desktop client JSON at the configured path. The `.env` file and OAuth token are ignored by Git. OAuth now requests `youtube.force-ssl` so the owner can create/end live polls as well as read chat; re-run the OAuth setup and approve the updated scope if you previously created a read-only token.
 
 ```bash
 python -m venv .venv
@@ -51,7 +51,8 @@ python -m youtube_bot_dashboard.live_worker
 - [x] Background worker and Gemini/Qwen provider adapters with response-schema validation
 - [x] Environment-based provider registry (model IDs/API credentials supplied outside source)
 - [x] Authenticated normalized-JSON ingestion endpoint for a trusted chat source
-- [x] Read-only YouTube OAuth setup and direct streamList listener code (live-broadcast verification pending)
+- [x] YouTube OAuth setup and direct streamList listener code (live-broadcast verification pending)
+- [x] Live Polls draft, explicit launch/end actions, final tally persistence, and dashboard results view (real-broadcast verification pending)
 - [ ] Provider-specific prompt caching and usage reconciliation
 - [x] One-at-a-time private Reply Finder card UI and two-sentence answer briefs
 - [x] Community memory profiles based on stable channel ID, visit history, and optional member badge
@@ -60,6 +61,8 @@ python -m youtube_bot_dashboard.live_worker
 - [ ] Active Moderation enforcement (future phase only)
 
 The project decision log in `docs/PROJECT_DECISIONS.md` is the source of truth for product decisions and future work.
+
+**Poll permissions:** YouTube poll insertion and closing use `liveChatMessages.insert` and `liveChatMessages.transition`. These actions require `https://www.googleapis.com/auth/youtube.force-ssl` (or the documented `youtube` scope); the dashboard invokes them only when you click Launch or End. YouTube's API allows one active poll per chat. Draft preview is local and never sends anything to YouTube.
 
 **Verification:** GitHub Actions run [40127347324](https://github.com/ZaphodBeeblebrox12/Youtube-Bot-Dashboard/actions/runs/40127347324) passed **67 tests in 2.98 seconds** on commit `72f311456e6c307ea658dc7773c611eeb42f6c1a`. This is automated test coverage, not a live YouTube OAuth/broadcast smoke test.
 
