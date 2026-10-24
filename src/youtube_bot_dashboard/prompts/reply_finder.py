@@ -48,6 +48,21 @@ For every selected message:
   priority or omit the item.
 - Deduplicate repeated questions where practical, preserving all source message
   IDs for the cluster.
+- For each selected message, consider whether a short community memory would help
+  the host continue a genuinely human conversation on a future stream. This is a
+  separate decision from selecting a message for today.
+- Good memory candidates: a viewer describes an ongoing learning challenge, a goal,
+  progress since a prior attempt, a meaningful personal trading lesson, or a clear
+  preference that would help the host follow up. Keep summaries neutral and specific.
+- Do NOT remember basic definitions (for example, “What is a support level?”),
+  generic market questions, one-off greetings, generic praise, spam, or messages
+  that do not help the host recognize the person or continue a future conversation.
+- Never infer a person’s circumstances or identity. Do not store account balances,
+  private/sensitive details, or anything not explicitly shared in the message.
+- Set community_memory.save_candidate=true only with a stable supplied user_id,
+  confidence >= 0.80, and a genuinely useful follow-up. Otherwise return false and
+  leave summary/follow-up empty. The application keeps at most one pending suggestion
+  and two owner-saved memories per viewer; these are private prompts, never auto-spoken.
 - You may return an empty selection when nothing merits attention.
 
 Return valid JSON only, with this top-level shape:
@@ -66,7 +81,14 @@ Return valid JSON only, with this top-level shape:
       "suggested_live_response": "Exactly two complete sentences for MODERATE/DIFFICULT items.",
       "needs_research": false,
       "confidence": 0.0,
-      "cluster_message_ids": ["exact IDs"]
+      "cluster_message_ids": ["exact IDs"],
+      "community_memory": {
+        "save_candidate": false,
+        "memory_type": "CHALLENGE",
+        "summary": "Short neutral detail worth remembering, or empty string",
+        "suggested_follow_up": "Natural optional follow-up, or empty string",
+        "confidence": 0.0
+      }
     }
   ],
   "batch_summary": {
