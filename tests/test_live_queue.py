@@ -131,7 +131,7 @@ def test_session_shield_excludes_future_messages_from_both_ai_pipelines(db):
         assert by_pipeline["REPLY_FINDER"].state == TaskState.EXCLUDED_SHIELDED.value
         assert "no message text sent" in by_pipeline["MODERATION"].last_error.lower()
         now = datetime(2026, 10, 25, tzinfo=timezone.utc) + timedelta(seconds=3)
-        config = LiveQueueConfig(batch_delay_seconds=0.1)
+        config = LiveQueueConfig(batch_delay_seconds=0.25)
         assert prepare_due_batch(session, session_id="session-1", pipeline=LivePipeline.MODERATION, config=config, now=now) is None
         assert prepare_due_batch(session, session_id="session-1", pipeline=LivePipeline.REPLY_FINDER, config=config, now=now) is None
 
@@ -447,7 +447,7 @@ def test_provider_cursor_does_not_advance_when_no_message_fits(db):
         assert session.get(ProviderRouteState, "live:REPLY_FINDER") is None
 
 
-def test_shielded_message_is_not_in_reply_ai_payload_but_remains_moderation_payload(db):
+def test_shielded_message_is_not_sent_to_either_ai_pipeline(db):
     _, factory = db
     now = datetime(2026, 10, 25, tzinfo=timezone.utc)
     config = LiveQueueConfig(batch_delay_seconds=2)
@@ -469,5 +469,4 @@ def test_shielded_message_is_not_in_reply_ai_payload_but_remains_moderation_payl
             session, session_id="session-1", pipeline=LivePipeline.MODERATION,
             config=config, now=now + timedelta(seconds=3)
         )
-        assert moderation_batch is not None
-        assert moderation_batch.message_ids == ("m-shielded",)
+        assert moderation_batch is None

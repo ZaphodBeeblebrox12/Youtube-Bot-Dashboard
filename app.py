@@ -448,7 +448,9 @@ elif page == "Settings":
     st.write("AI API keys/model IDs, prompt caching, provider-specific token counting and cleanup schedule will be added with their adapters and background worker.")
     st.caption("Keep Gemini and Qwen credentials in environment variables or secret storage, never in these ordinary settings fields.")
     st.code("python -m youtube_bot_dashboard.live_worker", language="bash")
-    st.caption("Run the worker as a separate background process after setting DATABASE_URL and the selected provider's credentials/model environment variables. For direct YouTube intake, configure the OAuth Desktop client, run python -m youtube_bot_dashboard.youtube_auth, then python -m youtube_bot_dashboard.youtube_listener. Real-broadcast veelif page == "Live Chat":
+    st.caption("Run the worker as a separate background process after setting DATABASE_URL and the selected provider's credentials/model environment variables. For direct YouTube intake, configure the OAuth Desktop client, run python -m youtube_bot_dashboard.youtube_auth, then python -m youtube_bot_dashboard.youtube_listener. Real-broadcast verification is still pending.")
+
+elif page == "Live Chat":
     st.subheader("AI-whitelisted live chat")
     st.caption(
         "Ordinary messages need high-confidence AI safety approval and a useful Reply Finder selection. "

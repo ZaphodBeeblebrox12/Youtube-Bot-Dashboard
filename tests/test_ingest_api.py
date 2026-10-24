@@ -91,7 +91,7 @@ def test_ingest_reports_messages_filtered_by_session_shield():
         with factory() as session:
             tasks = list(session.scalars(select(LiveMessageTask).where(LiveMessageTask.message_id == "message-2")))
             by_pipeline = {task.pipeline: task for task in tasks}
-            assert by_pipeline["MODERATION"].state == TaskState.PENDING.value
+            assert by_pipeline["MODERATION"].state == TaskState.EXCLUDED_SHIELDED.value
             assert by_pipeline["REPLY_FINDER"].state == TaskState.EXCLUDED_SHIELDED.value
     finally:
         engine.dispose()
