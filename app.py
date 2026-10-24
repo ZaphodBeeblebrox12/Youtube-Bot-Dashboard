@@ -14,6 +14,14 @@ import streamlit as st
 from dotenv import load_dotenv
 from sqlalchemy import func, select
 
+from youtube_bot_dashboard.community_memory import (
+    CommunityMemory,
+    CommunityViewerProfile,
+    CommunityViewerVisit,
+    forget_saved_memory,
+    forget_viewer,
+    review_memory_suggestion,
+)
 from youtube_bot_dashboard.live_queue import (
     BatchState,
     LiveAIRequestBatch,
@@ -93,7 +101,7 @@ with st.sidebar:
     st.caption("No YouTube bans, timeouts, mutes or deletions are connected in this version.")
     page = st.radio(
         "Workspace",
-        ["Overview", "Live Chat", "Reply Queue", "Settings", "Past Videos Cleanup"],
+        ["Overview", "Live Chat", "Reply Queue", "Community Memory", "Settings", "Past Videos Cleanup"],
         index=0,
     )
 
@@ -365,6 +373,8 @@ elif page == "Reply Queue":
                 shown.append({
                     "task_id": task.id,
                     "message_id": message.message_id,
+                    "session_id": message.session_id,
+                    "user_id": message.user_channel_id,
                     "message": message.text,
                     "username": message.username or "Unknown viewer",
                     "priority": result.get("priority", "NORMAL"),
@@ -384,6 +394,35 @@ elif page == "Reply Queue":
         item = shown[0]
         with st.container(border=True):
             st.subheader(item["username"])
+            # A returning-viewer cue is deliberately brief: glance at it, speak
+            # naturally if relevant, and keep the live conversation moving.
+            with db_session() as session:
+                profile = session.get(CommunityViewerProfile, item["user_id"]) if item["user_id"] else None
+                saved_memories = list(session.scalars(select(CommunityMemory).where(
+                    CommunityMemory.user_channel_id == item["user_id"],
+                    CommunityMemory.status == "SAVED",
+                ).order_by(CommunityMemory.created_at.desc()).limit(2))) if item["user_id"] else []
+                memory = next((
+                    candidate for candidate in saved_memories
+                    if candidate.last_used_session_id != item["session_id"]
+                ), None)
+            if profile and profile.distinct_sessions_seen >= 2:
+                st.caption(
+                    f"RETURNING VIEWER · Seen in {profile.distinct_sessions_seen} streams · "
+                    f"First seen {profile.first_seen_at.strftime('%d %b %Y')}"
+                )
+                if memory:
+                    st.markdown("**Remember:** " + memory.summary)
+                    st.caption("Possible follow-up: " + memory.suggested_follow_up)
+                    if st.button("Used this follow-up", key=f"memory-used-{memory.id}-{item['task_id']}"):
+                        with db_session() as session:
+                            saved = session.get(CommunityMemory, memory.id)
+                            if saved:
+                                from youtube_bot_dashboard.storage import utc_now
+                                saved.last_used_at = utc_now()
+                                saved.last_used_session_id = item["session_id"]
+                                session.commit()
+                        st.rerun()
             meta1, meta2, meta3, meta4 = st.columns(4)
             meta1.metric("Priority", item["priority"])
             meta2.metric("Ease", item["ease"])
@@ -430,6 +469,124 @@ elif page == "Reply Queue":
                 st.rerun()
     else:
         st.caption("No selected messages are waiting. The dashboard does not display the unfiltered chat feed.")
+
+elif page == "Community Memory":
+    st.subheader("Community Memory")
+    st.caption(
+        "A quiet reminder for meaningful returning viewers. Ordinary chat text is not saved as a memory. "
+        "Only the stable channel ID, basic visit history, and a short memory you approve are kept."
+    )
+    with db_session() as session:
+        profile_count = session.scalar(select(func.count()).select_from(CommunityViewerProfile)) or 0
+        returning_count = session.scalar(select(func.count()).select_from(CommunityViewerProfile).where(
+            CommunityViewerProfile.distinct_sessions_seen >= 2
+        )) or 0
+        suggestion_rows = list(session.scalars(
+            select(CommunityMemory).where(CommunityMemory.status == "SUGGESTED")
+            .order_by(CommunityMemory.created_at.desc()).limit(20)
+        ))
+        saved_rows = list(session.scalars(
+            select(CommunityMemory).where(CommunityMemory.status == "SAVED")
+            .order_by(CommunityMemory.created_at.desc()).limit(100)
+        ))
+        profiles = list(session.scalars(
+            select(CommunityViewerProfile).order_by(CommunityViewerProfile.last_seen_at.desc()).limit(100)
+        ))
+
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Viewers with profiles", profile_count)
+    c2.metric("Returning viewers", returning_count)
+    c3.metric("Suggested memories to review", len(suggestion_rows))
+    st.caption("The live Reply Queue shows a one-glance returning-viewer note when that person’s question is selected.")
+
+    st.divider()
+    st.subheader("Quick review · save only what helps you reconnect")
+    if suggestion_rows:
+        profiles_by_id = {profile.user_channel_id: profile for profile in profiles}
+        for candidate in suggestion_rows:
+            owner = profiles_by_id.get(candidate.user_channel_id)
+            display_name = (owner.display_name if owner and owner.display_name else "Unknown viewer")
+            with st.container(border=True):
+                st.markdown(f"**{display_name}** · {candidate.memory_type.title()}")
+                st.write(candidate.summary)
+                st.caption("Possible follow-up: " + candidate.suggested_follow_up)
+                st.caption("Suggested by AI · not saved until you approve it")
+                left, right = st.columns(2)
+                if left.button("Save memory", key=f"memory-save-{candidate.id}", type="primary", use_container_width=True):
+                    with db_session() as session:
+                        result = review_memory_suggestion(session, memory_id=candidate.id, decision="SAVE")
+                        session.commit()
+                    if result == "LIMIT_REACHED":
+                        st.warning("This viewer already has two saved memories. Remove one before saving another.")
+                    else:
+                        st.rerun()
+                if right.button("Skip", key=f"memory-skip-{candidate.id}", use_container_width=True):
+                    with db_session() as session:
+                        review_memory_suggestion(session, memory_id=candidate.id, decision="DISMISS")
+                        session.commit()
+                    st.rerun()
+    else:
+        st.caption("No memory suggestions need review.")
+
+    st.divider()
+    st.subheader("Saved memories · maximum two per viewer")
+    if saved_rows:
+        profiles_by_id = {profile.user_channel_id: profile for profile in profiles}
+        st.dataframe([
+            {
+                "Viewer": (profiles_by_id.get(memory.user_channel_id).display_name
+                           if profiles_by_id.get(memory.user_channel_id)
+                           and profiles_by_id.get(memory.user_channel_id).display_name
+                           else "Unknown viewer"),
+                "Memory": memory.summary,
+                "Suggested follow-up": memory.suggested_follow_up,
+                "Type": memory.memory_type.title(),
+                "Saved": memory.reviewed_at or memory.created_at,
+            }
+            for memory in saved_rows
+        ], use_container_width=True, hide_index=True)
+        memory_ids = [memory.id for memory in saved_rows]
+        selected_memory = st.selectbox(
+            "Forget a saved memory",
+            options=memory_ids,
+            format_func=lambda memory_id: next(
+                (f"{next((p.display_name for p in profiles if p.user_channel_id == next(m.user_channel_id for m in saved_rows if m.id == memory_id)), 'Unknown viewer')} · "
+                 f"{next(m.summary for m in saved_rows if m.id == memory_id)}"),
+                ""
+            ),
+        )
+        if st.button("Forget selected memory"):
+            with db_session() as session:
+                forget_saved_memory(session, memory_id=selected_memory)
+                session.commit()
+            st.rerun()
+    else:
+        st.caption("No saved memories yet.")
+
+    st.divider()
+    st.subheader("Privacy control")
+    if profiles:
+        profile_options = [profile.user_channel_id for profile in profiles]
+        profile_labels = {
+            profile.user_channel_id: f"{profile.display_name or 'Unknown viewer'} · {profile.user_channel_id}"
+            for profile in profiles
+        }
+        selected_viewer = st.selectbox(
+            "Forget a viewer completely",
+            options=profile_options,
+            format_func=lambda user_id: profile_labels[user_id],
+        )
+        confirm_forget = st.checkbox(
+            "I understand this deletes the viewer profile, visit history, and saved/suggested memories.",
+            key="confirm-forget-viewer",
+        )
+        if st.button("Forget viewer and all memories", disabled=not confirm_forget):
+            with db_session() as session:
+                forget_viewer(session, user_channel_id=selected_viewer)
+                session.commit()
+            st.rerun()
+    else:
+        st.caption("No viewer profiles have been recorded yet.")
 
 elif page == "Past Videos Cleanup":
     st.subheader("Past Videos Cleanup")
