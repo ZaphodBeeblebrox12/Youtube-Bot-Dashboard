@@ -11,6 +11,7 @@ import os
 from contextlib import contextmanager
 
 import streamlit as st
+from dotenv import load_dotenv
 from sqlalchemy import func, select
 
 from youtube_bot_dashboard.live_queue import (
@@ -32,6 +33,8 @@ from youtube_bot_dashboard.live_queue import (
 from youtube_bot_dashboard.storage import create_engine_and_sessions, create_schema
 from youtube_bot_dashboard.providers.registry import ProviderRegistry
 
+
+load_dotenv()
 
 st.set_page_config(
     page_title="YouTube Bot Dashboard",
