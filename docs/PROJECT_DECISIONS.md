@@ -310,11 +310,11 @@ The owner wants to keep the chat open, including antagonistic participants where
 - Add a user-level `reply_excluded` / “Do not surface in reply queue” state to the dashboard.
 - Before constructing the Reply Finder AI request, filter out messages from excluded users. Do not merely ask the model to ignore them after sending the messages; perform the exclusion in backend code before the API call to save input tokens.
 - Do not show excluded users' messages in the normal curated live queue. The host should not need to read them.
-- The exclusion applies to the Reply Finder/answer-assistance path only. **The moderation pipeline continues to screen incoming chat independently** for spam, threats, scams and other policy violations, and may record incidents/evidence. In the initial launch mode, this screening does not issue bans, timeouts, message deletions, or other punitive platform actions. Reply exclusion must not silently disable safety monitoring or erase evidence.
+- The earlier Reply Finder-only behavior was superseded by the dated 2026-10-25 all-AI Session Shield decision below. Once shielded, subsequent messages are excluded from both Moderation and Reply Finder for the rest of the current session. The moderation result that triggered the shield remains available as audit evidence; an already-dispatched provider request cannot be recalled, but its result must not undo the exclusion. No public enforcement actions occur.
 - Make exclusion reversible. The dashboard should show who is excluded, the reason, who/what added the exclusion, when it was added, and allow a moderator to remove it.
 - Prefer the stable platform-supplied user/channel ID as the exclusion key. Store display name/handle as a label only because names can change or collide. If there is no stable ID in the incoming JSON, use a clearly marked fallback key and do not claim identity certainty.
-- When the moderation/classification workflow identifies a user as a **high-confidence repeated-antagonist or ban candidate**, automatically add them to the Reply Finder exclusion list for the **remainder of the current live session only**. This stops their messages consuming Reply Finder tokens and keeps them out of the host's attention queue. This is a reply-queue exclusion, **not by itself a platform ban**.
-- The default “initial state” for this control is **Session-only exclusion** (also shown as “Session Shield” in the dashboard): at the next session boundary, the exclusion expires automatically and the user becomes eligible for the Reply Finder again, unless they are flagged again in that new session.
+- When the moderation/classification workflow identifies a user as a high-confidence qualifying candidate, Session Shield can exclude subsequent messages from both Moderation and Reply Finder for the remainder of the current live session. This is a private AI-input exclusion, **not by itself a platform ban**.
+- Session Shield is session-only; at the next session boundary it expires. A separate moderator-applied persistent internal restriction may remain active across sessions until its expiry or explicit revocation.
 - In the initial launch mode, this is **only a reply-queue exclusion**, not a platform sanction. The formal session / 7-day / 30-day / permanent ladder is reserved for a separately enabled future enforcement mode.
 - Ambiguous/low-confidence cases should be flagged for review instead of automatically excluded. Never exclude a user solely because they express a bearish/bullish view, disagree respectfully, criticize the creator or ask a challenging good-faith question.
 - The owner should be able to add/remove exclusions manually, and reverse an automatic exclusion if it was a false positive. Record the reason, supporting incident references, confidence, source of the decision (AI or manual), timestamp and expiry/session ID.
@@ -340,10 +340,10 @@ The dashboard must have two distinct, clearly labelled modes. Do not mix their e
 
 ### Lever 1 — Session Shield (initial mode)
 
-**No one is banned, platform-muted, timed out, or prevented from chatting.** Session Shield applies an internal, application-level mute only to the Reply Finder/whitelist pipeline: once a user is shielded, their messages are filtered out before they are included in that AI request. They can continue chatting publicly. The purpose is to preserve chat activity while protecting the host's attention and saving AI tokens.
+**No one is banned, platform-muted, timed out, or prevented from chatting.** Under the current 2026-10-25 decision, Session Shield applies an internal AI-input exclusion to both Moderation and Reply Finder for the rest of the live session. The user's messages that triggered Shield remain available as audit evidence; subsequent messages are not sent to either AI pipeline. They can continue chatting publicly.
 
 - The moderation/classification pipeline can identify and log likely violations and repeated antagonism, with supporting evidence.
-- A high-confidence flagged user is **internally muted for the Reply Finder/whitelist pipeline**. Backend code must remove their messages before serializing the Reply Finder AI request; do not send the messages to that AI and merely ask it to ignore them. This keeps their messages out of the host's private answer queue and saves tokens.
+- A high-confidence flagged user is **internally excluded from both AI pipelines for the rest of this session**. Backend code removes their subsequent messages before either provider payload is serialized; do not send the messages to an AI and merely ask it to ignore them. The result that triggered Shield remains available for audit, while subsequent messages save tokens and stay out of the host's private queue.
 - The user remains fully able to participate in YouTube chat. This lever must not call YouTube ban, timeout, mute, or message-deletion APIs.
 - Session Shield exclusions expire at the end of the current live session. At the next session, the user can enter the Reply Finder again unless flagged anew.
 - UI wording should say “Shielded from Reply Finder until this session ends” or “Excluded from reply suggestions until this session ends”. Do not imply the user is muted or restricted on YouTube. A dashboard status can use “Internally muted from Reply Finder” if the UI makes clear this affects only the private AI queue.
@@ -426,12 +426,13 @@ Validation must check that medium/hard suggestions contain exactly two sentences
 
 ### Session Shield terminology clarification (decision: 2026-10-24)
 
-“Mute” in Lever 1 means **internal filtering from the Reply Finder/whitelist AI input only**. It is not a YouTube moderation action. The message pipeline should branch so that:
+“Mute” in Lever 1 means **internal AI-input exclusion only**. It is not a YouTube moderation action. Under the latest 2026-10-25 behavior:
 - incoming chat continues to be received;
-- moderation classification/logging continues on its separate path;
-- for shielded user IDs, messages are filtered out before the Reply Finder payload is built, avoiding all Reply Finder input tokens for those messages;
+- when a viewer becomes shielded, their triggering moderation result is retained for audit;
+- their subsequent messages are filtered out before both Moderation and Reply Finder payloads are built;
+- restrictions are keyed by stable supplied channel ID, not display name;
 - the user remains free to chat on YouTube;
-- the internal mute expires at the current session boundary unless the user is shielded again in a later session.
+- Session Shield expires at the current session boundary. Persistent internal restrictions are a separate, moderator-controlled record that may span sessions.
 
 Tests must inspect the actual serialized Reply Finder request and confirm that shielded users' messages are absent, while confirming the user can still chat and the moderation path is not inadvertently bypassed.
 
@@ -658,7 +659,7 @@ A live-chat queue slice and an initial Streamlit control panel have been added o
 - **Maximum batch size:** 100 messages by default, but the queue flushes on the 2-second age of the oldest queued message or when the cap is reached—whichever occurs first. It does not wait for 100 messages if chat is slower.
 - **Input-token budget:** default estimated total 12,000 tokens, with 3,000 tokens reserved for system instructions. The current estimate is only a heuristic; provider-specific token counting is still required before production.
 - **Provider choice:** default is round-robin between Gemini and Qwen, independently per pipeline, for comparison. The settings model also supports pinning a pipeline to Gemini only or Qwen only. Concrete Gemini and Qwen adapter code and a provider registry now exist; live credentials and actual provider smoke tests remain outstanding.
-- **Separate pipelines:** each incoming message creates an independently tracked moderation task and Reply Finder task. The moderator pipeline continues for a shielded user; Session Shield only filters that user's messages out of the Reply Finder payload.
+- **Separate pipelines:** each incoming message creates independently tracked Moderation and Reply Finder tasks. A viewer already shielded in the session is excluded from both pipelines; the completed moderation result that triggered the shield remains as audit evidence.
 - **Per-message state:** pending, batched, sent, completed, retryable/final failure, or excluded by Session Shield. Every batch stores its provider, payload, response, token usage, timestamps and status.
 - **Partial provider response:** missing message IDs in moderation results are retryable; Reply Finder results intentionally include only selected messages, so non-selected inputs are recorded as completed/not selected. The worker validates returned IDs and classification fields against the submitted batch before persistence; tests and live provider response checks still need verification.
 - **Provider rotation and message statuses are database-backed** to preserve work tracking across application restarts.
@@ -697,7 +698,7 @@ Implementation has progressed from queue scaffolding to a provider-call worker:
 - `providers/qwen.py` uses an OpenAI-compatible endpoint and JSON response mode. Configure `QWEN_API_KEY`, `QWEN_BASE_URL`, and `QWEN_MODEL`; endpoint/model are intentionally not hard-coded because service/region choices are not yet settled.
 - `live_worker.py` polls active sessions for due batches, persists a batch before network I/O, marks it sent, invokes the selected adapter, checks JSON structure and exact message IDs, stores per-message results/tokens, and marks omissions/errors for bounded retry.
 - Round-robin routing is independent per pipeline, so moderation batches can be compared between Gemini and Qwen separately from Reply Finder batches. Current default is Gemini then Qwen if both are configured and enabled.
-- **Session Shield activation:** a moderation result only triggers internal Reply Finder filtering if the model sets `suggest_shield=true`, the category is a violation rather than `NO_VIOLATION`/`UNCERTAIN`, the user ID is present, and confidence reaches the configurable threshold (default 0.90). The shield function removes the user from any prepared-but-unsent Reply Finder payload; moderation continues. No YouTube mute/ban/timeout/delete API is called.
+- **Session Shield activation:** a validated moderation result only triggers internal exclusion if the model sets `suggest_shield=true`, the category is a violation rather than `NO_VIOLATION`/`UNCERTAIN`, the stable user ID is present, and confidence reaches the configurable threshold (default 0.90). Subsequent messages are excluded from both AI pipelines. Prepared-but-unsent payloads are scrubbed; in-flight results cannot undo exclusion. No YouTube mute/ban/timeout/delete API is called.
 - Settings UI now exposes batch delay (default 2 seconds), maximum messages (default 100), approximate input-token budget/reserved prompt tokens, provider strategy and Session Shield confidence threshold.
 - `.env.example` lists variable names only.
 
@@ -789,7 +790,17 @@ Official YouTube references:
 
 - **Shielded viewer rule:** When Session Shield is active for a viewer in the current session, subsequent messages are marked `EXCLUDED_SHIELDED` for both MODERATION and REPLY_FINDER before provider dispatch. Batch preparation checks Shield for both pipelines and scrubs prepared-but-unsent payloads.
 - **Already-dispatched requests:** Provider requests cannot be recalled. If a viewer is shielded while a request is in flight, the task is marked excluded and its response is not persisted into the host queue. Completed moderation results that triggered the shield remain as an audit record.
-- **Enforcement boundary:** Session Shield is a private AI-input exclusion. This repository code does not itself issue YouTube ban, mute, or timeout actions from this feature.
+- **Enforcement boundary:** Session Shield and persistent internal restrictions are private AI-input exclusions. This repository code does not itself issue YouTube ban, mute, or timeout actions from these features.
 - **Super Chat detection:** The direct streamList listener stores YouTube-supplied amount micros, currency, amount display string, and tier. Empty-comment Super Chats are still ingested. The normalized JSON bridge accepts equivalent fields from its trusted source.
 - **Super Chat priority:** Pending Super Chats are placed before ordinary chat in AI batches and trigger preparation immediately rather than waiting for the normal two-second window. The Reply Finder prompt treats a paid message as priority when its content is constructive.
 - **Display safety:** Ordinary messages are shown only after a completed high-confidence `NO_VIOLATION` result and Reply Finder selection. Super Chats can bypass the usefulness-selection requirement but still require that same completed, high-confidence safety clearance. The unfiltered control stays off by default.
+
+
+## Persistent moderation foundation checkpoint (2026-10-25)
+
+- Validated moderation results can now create pending review incidents with stable source IDs, category, severity, confidence, explanation, evidence-message IDs, provider/model metadata and an audit event. AI output alone never confirms an offence or creates a strike.
+- A moderator can confirm or dismiss a candidate, overturn a confirmed incident, and record/resolve an appeal. Confirmed qualifying incidents create at most one session strike per supplied stable channel ID per distinct live session. Reversals revoke or reassign the linked strike and add audit events.
+- Three confirmed strikes across three distinct live sessions are a future enforcement-review eligibility threshold only. Automatic YouTube enforcement remains disabled. Later escalation durations/counts remain unfinalized and must not be inferred from this implementation.
+- A separate moderator-controlled persistent internal restriction can be permanent or timed. It filters future messages from both Moderation and Reply Finder across sessions, scrubs prepared payloads, and prevents an in-flight result from restoring an excluded task. It does not restrict the viewer's public YouTube chat and is not a YouTube ban.
+- The Moderation Review workspace exposes candidate evidence, review decisions, incident history, internal restrictions, appeals and an audit log. Super Chat priority cannot bypass Session Shield or persistent internal restrictions.
+- Production deployments still need their normal backup/migration process. An additive schema migration is version-controlled in the migrations directory. Live broadcast and OAuth enforcement verification remain separate; no live enforcement API is connected.

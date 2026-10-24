@@ -17,12 +17,7 @@ The current implementation only has **session-scoped Session Shield**. Do not mi
 
 ## 2. Settled moderation policy from the project notes
 
-The notes specify the following escalation policy for confirmed qualifying offences by the **same reliably identified YouTube account**:
-
-1. First offence: restrict until the current chat/session ends.
-2. Second offence: 7-day ban.
-3. Third offence: 30-day ban.
-4. Fourth offence: permanent ban.
+The authoritative policy is the more detailed PROJECT_DECISIONS.md; the four-step first/7-day/30-day/permanent ladder is an inconsistent draft and is not implemented. Current saved rule: the first formal enforcement action is eligible only after three confirmed session strikes across three distinct live sessions for the same stable YouTube channel ID. The first action is intended to be temporary/session-scoped, pending verification of exact YouTube API duration semantics. Later escalation durations and counts remain unfinalized. Until the owner approves the future rulebook, confirmed incidents remain a review/audit workflow and enforcement stays disabled.
 
 Policy is enforced by the backend, **not by the AI model**. AI produces a structured classification/recommendation; backend validation, confirmed incident history, deduplication, strike counting, and sanction decisions are separate steps.
 
@@ -35,7 +30,7 @@ Other settled rules:
 - Cross-account ban evasion is out of scope without reliable linking evidence. Similar names, avatars, wording, or writing style alone do not establish identity.
 - Start in dry-run mode; do not enable live automated enforcement until representative false-positive/false-negative tests and enforcement semantics are reviewed.
 
-The notes say an active restriction/ban must be represented in the user's record and active sanctions. The user's latest clarification requires the pre-AI gate to respect that active state across future messages/streams. A new stream must not silently erase an unexpired timed ban or permanent sanction. First-offence current-session restriction and the timed/permanent sanctions above must retain their distinct expiration semantics.
+A moderator-applied persistent internal restriction is now represented separately from Session Shield and remains effective across new sessions until expiry or explicit revocation. The pre-AI gate must honor active internal restrictions. Actual YouTube sanctions and the unfinalized post-first-ban ladder are not implemented and must not be implied by the internal restriction feature.
 
 ## 3. Current implementation checkpoint
 
@@ -71,11 +66,11 @@ The notes say an active restriction/ban must be represented in the user's record
 
 At code checkpoint `4026f55eec93b8492f024510cad21774093b17e7`, GitHub Actions test run `40130179648` passed with **100 tests**. These are unit/integration tests, including faked YouTube source objects—not a live-broadcast test.
 
-## 4. Important gap: persistent strikes, sanctions, blacklist and enforcement
+## 4. Implementation status after the persistent moderation foundation
 
-Before declaring moderation complete, inspect the current source again. At the checkpoint above, there is a `SessionShieldRecord`, but no complete persistent offence/strike/sanction domain model and policy engine implementing the agreed escalation ladder. The current repository also does not yet carry out the full authorized YouTube enforcement workflow.
+The feature branch adds durable moderation incident candidates, confirmed session-strike records, reviewer decisions, appeal/reversal records, moderation audit events, and timed/permanent internal AI restrictions. Active internal restrictions are checked before AI processing at ingestion and batch preparation. The dashboard exposes review, override, appeal, restriction and audit controls.
 
-Do not claim the ban/mute system is finished just because the Shield tests pass.
+Still not implemented: YouTube ban/timeout enforcement, the finalized post-first-ban escalation ladder, owner-controlled activation of live enforcement, live-broadcast/OAuth verification, multi-worker locking, and a production migration runner. Do not describe internal restrictions as YouTube bans.
 
 ## 5. Required implementation plan for the next chat
 
@@ -161,3 +156,13 @@ Run focused tests first, then full CI. Test against the fake YouTube service; re
 - AI whitelist display policy: https://github.com/ZaphodBeeblebrox12/Youtube-Bot-Dashboard/blob/main/src/youtube_bot_dashboard/chat_visibility.py
 - Live Chat / Reply Queue UI: https://github.com/ZaphodBeeblebrox12/Youtube-Bot-Dashboard/blob/main/app.py
 - Last green test run at code checkpoint: https://github.com/ZaphodBeeblebrox12/Youtube-Bot-Dashboard/actions/runs/40130179648
+
+
+## 8. Persistent moderation implementation update (feature branch)
+
+- Validated violation classifications create pending incident candidates; a moderator must explicitly confirm one before it counts as a session strike.
+- A confirmed qualifying offence can add at most one strike per stable channel ID per live session. The saved three-distinct-session threshold is used only for enforcement review; no enforcement API is called.
+- Persistent internal restrictions can be timed or permanent, apply across sessions, and exclude messages before both AI pipelines. They are distinct from Session Shield and do not prevent public YouTube chat participation.
+- The dashboard has review, dismissal, override/overturn, appeal, strike-correction and audit controls.
+- Policy authority: PROJECT_DECISIONS.md. The proposed 7-day/30-day/permanent escalation remains unresolved; do not activate automatic enforcement until the owner approves the final rulebook.
+- Test and CI status must be updated after the branch workflow completes.
