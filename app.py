@@ -16,6 +16,8 @@ from sqlalchemy import func, select
 from youtube_bot_dashboard.live_queue import (
     BatchState,
     LiveAIRequestBatch,
+    LiveSessionRecord,
+    SessionShieldRecord,
     LiveMessageRecord,
     LiveMessageTask,
     LivePipeline,
@@ -24,6 +26,7 @@ from youtube_bot_dashboard.live_queue import (
     ProviderStrategy,
     TaskState,
     get_live_queue_config,
+    unshield_user_for_session,
     update_live_queue_config,
 )
 from youtube_bot_dashboard.storage import create_engine_and_sessions, create_schema
@@ -258,7 +261,7 @@ elif page == "Live Chat":
             select(LiveMessageTask).order_by(LiveMessageTask.queued_at.desc()).limit(100)
         ))
         if rows:
-            st.write("Latest per-message tasks")
+            st.write("Latest per-message task states")
             st.dataframe([
                 {
                     "Message ID": task.message_id,
@@ -273,6 +276,67 @@ elif page == "Live Chat":
             ], use_container_width=True)
         else:
             st.caption("No live chat messages have been ingested yet.")
+
+    st.divider()
+    st.subheader("Session Shield · internal Reply Finder filter")
+    st.caption("Shielded users remain able to chat on YouTube. Their messages are skipped only by the Reply Finder pipeline until this session ends.")
+    with db_session() as session:
+        shields = session.execute(
+            select(SessionShieldRecord, LiveSessionRecord)
+            .join(LiveSessionRecord, LiveSessionRecord.session_id == SessionShieldRecord.session_id)
+            .where(SessionShieldRecord.active.is_(True), LiveSessionRecord.status == "ACTIVE")
+            .order_by(SessionShieldRecord.created_at.desc())
+        ).all()
+        shield_items = [
+            {
+                "id": shield.id,
+                "username": shield.display_name or "Unknown viewer",
+                "user_id": shield.user_channel_id,
+                "session_id": shield.session_id,
+                "reason": shield.reason,
+                "confidence": shield.confidence,
+                "source": shield.source,
+                "created_at": shield.created_at,
+            }
+            for shield, _live_session in shields
+        ]
+    if shield_items:
+        st.dataframe([
+            {
+                "Username": item["username"],
+                "User channel ID": item["user_id"],
+                "Reason": item["reason"],
+                "Confidence": item["confidence"],
+                "Source": item["source"],
+                "Added at": item["created_at"],
+                "Session": item["session_id"],
+            }
+            for item in shield_items
+        ], use_container_width=True, hide_index=True)
+        option_ids = [item["id"] for item in shield_items]
+        labels = {
+            item["id"]: f"{item['username']} · {item['user_id']} · {item['session_id']}"
+            for item in shield_items
+        }
+        selected_id = st.selectbox(
+            "Remove an internal filter",
+            options=option_ids,
+            format_func=lambda value: labels[value],
+        )
+        if st.button("Remove Session Shield for selected user", use_container_width=True):
+            selected = next(item for item in shield_items if item["id"] == selected_id)
+            with db_session() as session:
+                did_remove = unshield_user_for_session(
+                    session,
+                    session_id=selected["session_id"],
+                    user_channel_id=selected["user_id"],
+                )
+                session.commit()
+            if did_remove:
+                st.success("Internal filter removed for future messages in this session. Previously excluded messages are not automatically requeued.")
+                st.rerun()
+    else:
+        st.caption("No active Session Shield exclusions for an active session.")
 
 elif page == "Reply Queue":
     st.subheader("Private Reply Finder queue")
