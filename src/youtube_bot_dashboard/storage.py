@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from enum import StrEnum
 import hashlib
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, create_engine, select
+from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, create_engine, inspect, select
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
@@ -143,6 +143,17 @@ def create_schema(engine: Engine) -> None:
     from youtube_bot_dashboard import community_memory as _community_memory  # noqa: F401
 
     Base.metadata.create_all(engine)
+
+    # Local SQLite databases may predate the ingestion-source discriminator.
+    # This tiny development-only compatibility step is not a substitute for
+    # versioned PostgreSQL migrations in production.
+    if engine.dialect.name == "sqlite":
+        columns = {column["name"] for column in inspect(engine).get_columns("live_sessions")}
+        if "source" not in columns:
+            with engine.begin() as connection:
+                connection.exec_driver_sql(
+                    "ALTER TABLE live_sessions ADD COLUMN source VARCHAR(24) NOT NULL DEFAULT 'JSON_INGEST'"
+                )
 
 
 def register_video(
