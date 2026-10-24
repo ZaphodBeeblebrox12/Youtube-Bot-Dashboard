@@ -42,6 +42,7 @@ class IncomingMessageBody(BaseModel):
     message_id: str = Field(min_length=1, max_length=160)
     user_id: str | None = Field(default=None, max_length=120)
     username: str | None = Field(default=None, max_length=300)
+    is_member: bool | None = None
     text: str = Field(max_length=10000)
     published_at: datetime | None = None
 
@@ -112,6 +113,7 @@ def ingest_payload(factory, body: LiveIngestBody) -> dict:
                         text=item.text,
                         user_channel_id=item.user_id,
                         username=item.username,
+                        is_member=item.is_member,
                         published_at=item.published_at,
                     ),
                 )
