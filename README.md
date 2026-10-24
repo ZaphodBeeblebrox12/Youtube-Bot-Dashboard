@@ -59,7 +59,7 @@ python -m youtube_bot_dashboard.live_worker
 - [ ] Preview/approval-based comment deletion integration
 - [ ] Active Moderation enforcement (future phase only)
 
-The project decision log in `docs/PROJECT_DECISIONS.md` is the source of truth for product decisions and future work.
+The project decision log in `docs/PROJECT_DECISIONS.md` is the source of truth for product decisions and future work.\n\n**Verification:** GitHub Actions run [40127347324](https://github.com/ZaphodBeeblebrox12/Youtube-Bot-Dashboard/actions/runs/40127347324) passed **67 tests in 2.98 seconds** on commit `72f311456e6c307ea658dc7773c611eeb42f6c1a`. This is automated test coverage, not a live YouTube OAuth/broadcast smoke test.
 
 
 ## External JSON source format
