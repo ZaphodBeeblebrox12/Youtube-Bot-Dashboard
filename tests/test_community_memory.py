@@ -73,13 +73,12 @@ def test_memory_suggestion_requires_existing_profile_and_high_confidence():
     engine, factory = setup_db()
     try:
         with factory() as session:
-            ingest_source(session, "m-1", user_id=None)
             assert create_memory_suggestion(
-                session, user_channel_id="channel-1", session_id="s1", source_message_id="m-1",
+                session, user_channel_id="channel-1", session_id="s1", source_message_id="missing-message",
                 memory_type="CHALLENGE", summary="Often enters too early",
                 suggested_follow_up="Has that improved?", confidence=0.99,
             ) is None
-            record_viewer_activity(session, user_channel_id="channel-1", display_name="Asha", session_id="s1")
+            ingest_source(session, "m-1")
             assert create_memory_suggestion(
                 session, user_channel_id="channel-1", session_id="s1", source_message_id="m-1",
                 memory_type="CHALLENGE", summary="Often enters too early",
