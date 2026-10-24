@@ -104,6 +104,7 @@ def record_viewer_activity(
             last_seen_at=now,
             message_count=1,
         ))
+        session.flush()
         return profile
 
     profile.last_seen_at = now
