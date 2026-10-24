@@ -496,6 +496,13 @@ def ingest_live_message(
     return IngestResult(True, incoming.message_id, mod_task.id, reply_task.id, excluded)
 
 
+def _as_utc_aware(value: datetime) -> datetime:
+    """Normalize SQLite's naive datetime round-trip and aware PostgreSQL values."""
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
 def should_flush_batch(
     *,
     pending_count: int,
@@ -510,7 +517,7 @@ def should_flush_batch(
         return True
     if oldest_queued_at is None:
         return False
-    elapsed = (now - oldest_queued_at).total_seconds()
+    elapsed = (_as_utc_aware(now) - _as_utc_aware(oldest_queued_at)).total_seconds()
     return elapsed >= config.batch_delay_seconds
 
 
