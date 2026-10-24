@@ -612,9 +612,6 @@ elif page == "Live Chat":
         else:
             st.caption("No task records yet.")
 
- else:
-            st.caption("No live chat messages have been ingested yet.")
-
     st.divider()
     st.subheader("Session Shield · all-AI input filter")
     st.caption("A shielded viewer can still post on YouTube, but their subsequent messages are excluded from both AI pipelines for the rest of this session. This internal filter does not ban or mute anyone on YouTube.")
