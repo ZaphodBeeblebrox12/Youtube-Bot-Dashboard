@@ -6,7 +6,7 @@ Only short, owner-approved memory suggestions are retained; no public reply is s
 from __future__ import annotations
 
 from datetime import datetime
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, select, func
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, select, func
 from sqlalchemy.orm import Mapped, Session, mapped_column
 
 from youtube_bot_dashboard.storage import Base, utc_now
@@ -22,6 +22,7 @@ class CommunityViewerProfile(Base):
 
     user_channel_id: Mapped[str] = mapped_column(String(120), primary_key=True)
     display_name: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    is_member: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
     last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False, index=True)
     first_seen_session_id: Mapped[str] = mapped_column(String(120), nullable=False)
@@ -74,6 +75,7 @@ def record_viewer_activity(
     user_channel_id: str | None,
     display_name: str | None,
     session_id: str,
+    is_member: bool | None = None,
     observed_at: datetime | None = None,
 ) -> CommunityViewerProfile | None:
     """Record presence by stable channel ID, without saving ordinary chat text."""
@@ -85,6 +87,7 @@ def record_viewer_activity(
         profile = CommunityViewerProfile(
             user_channel_id=user_channel_id,
             display_name=display_name,
+            is_member=is_member,
             first_seen_at=now,
             last_seen_at=now,
             first_seen_session_id=session_id,
@@ -108,6 +111,8 @@ def record_viewer_activity(
     profile.total_message_count += 1
     if display_name:
         profile.display_name = display_name
+    if is_member is not None:
+        profile.is_member = is_member
     visit = session.scalar(select(CommunityViewerVisit).where(
         CommunityViewerVisit.user_channel_id == user_channel_id,
         CommunityViewerVisit.session_id == session_id,
