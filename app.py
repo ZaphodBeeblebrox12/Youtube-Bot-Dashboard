@@ -285,7 +285,7 @@ elif page == "Reply Queue":
                 LiveMessageTask.pipeline == LivePipeline.REPLY_FINDER.value,
                 LiveMessageTask.state == TaskState.COMPLETED.value,
             )
-            .order_by(LiveMessageTask.completed_at.desc())
+            .order_by(LiveMessageTask.completed_at.asc())
             .limit(250)
         ).all()
         shown = []
