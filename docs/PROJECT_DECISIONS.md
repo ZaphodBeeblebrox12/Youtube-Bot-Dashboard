@@ -534,10 +534,14 @@ These are design recommendations for review, not new user-approved moderation or
 - Keep this edited-comment recheck as a separate queue and report it separately from genuinely new comments, so AI usage remains predictable.
 
 ### 3. Explicit negative-comment policy settings
-- Separate *target* (creator, content, another commenter, market/third party, uncertain), *sentiment* (negative, neutral, positive, mixed) and *type* (personal abuse, hostile dismissal, respectful criticism/correction, off-topic negative commentary, spam, satire/ambiguous).
-- Let the owner configure which combinations are deletion candidates. Default workflow remains preview/review first.
-- Do not silently treat all negative sentiment about the creator/content as the same kind of abuse; show respectful criticism/corrections separately, because broad deletion could remove feedback the owner might value. The owner can explicitly choose a stricter cleanup policy after seeing examples.
-- Use representative examples to calibrate the policy before enabling automatic deletion.
+- Separate three independent judgements: **target** (creator, content, another commenter, market/third party, uncertain), **sentiment** (negative, neutral, positive, mixed), and **conduct type** (personal abuse, harassment, threat, doxxing/privacy violation, spam, scam, content criticism, respectful correction, off-topic commentary, satire/ambiguous).
+- **Negative sentiment about the creator's content is not, by itself, grounds for deletion.** Genuine criticism must stay published by default—even when blunt or strongly worded.
+- Explicit keep examples include: “This lesson is terrible and your explanation makes no sense”; “I think this explanation is wrong”; “This strategy is confusing”; factual corrections; reasoned disagreement; and negative opinions about market conditions. These can be negative about the creator/content while remaining legitimate feedback.
+- Distinguish criticism of work from personal abuse. “Your explanation makes no sense” critiques the explanation and should be kept. A direct degrading personal attack at the creator (for example, attacking their intelligence or using a personal slur) may be a deletion candidate depending on confidence and the approved rule settings. Do not classify second-person wording alone as a personal attack.
+- Split the default outcomes into: **KEEP** (genuine criticism, correction, opinion, or unrelated negative commentary); **REVIEW** (ambiguous target/tone, satire, mixed context, borderline insult, or uncertain AI classification); and **DELETION_CANDIDATE** (clear, high-confidence personal abuse, harassment, threat, privacy violation, spam/scam or other defined channel-rule violation directed at the relevant target).
+- A comment can have negative sentiment and still be KEEP. The AI must state a separate reason/type that explains why it is a rule violation, not merely say “negative”.
+- The initial workflow remains preview/review first. Deletion candidates are proposals only; no comment is deleted without owner approval. Any later auto-delete setting must be separate, disabled by default, and narrowly configured around clear violations—not general criticism.
+- Calibrate with examples and counterexamples before enabling any automatic deletion. Measure false positives specifically on legitimate critical feedback.
 
 ### 4. OAuth and credential safety
 - Use the minimum YouTube OAuth scopes required for each feature, and clearly show the connected channel identity.
