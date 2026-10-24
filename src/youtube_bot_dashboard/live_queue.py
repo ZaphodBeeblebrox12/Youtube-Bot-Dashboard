@@ -111,6 +111,7 @@ class LiveSessionRecord(Base):
     session_id: Mapped[str] = mapped_column(String(120), primary_key=True)
     live_chat_id: Mapped[str | None] = mapped_column(String(160), unique=True, nullable=True)
     broadcast_id: Mapped[str | None] = mapped_column(String(160), nullable=True, index=True)
+    source: Mapped[str] = mapped_column(String(24), default="JSON_INGEST", nullable=False, index=True)
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
     ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     status: Mapped[str] = mapped_column(String(24), default="ACTIVE", nullable=False, index=True)
@@ -294,6 +295,7 @@ def register_live_session(
     session_id: str,
     live_chat_id: str | None = None,
     broadcast_id: str | None = None,
+    source: str = "JSON_INGEST",
     started_at: datetime | None = None,
 ) -> LiveSessionRecord:
     if not session_id.strip():
@@ -304,6 +306,7 @@ def register_live_session(
             session_id=session_id,
             live_chat_id=live_chat_id,
             broadcast_id=broadcast_id,
+            source=source,
             started_at=started_at or utc_now(),
             status="ACTIVE",
         )
@@ -313,6 +316,7 @@ def register_live_session(
             record.live_chat_id = live_chat_id
         if broadcast_id is not None:
             record.broadcast_id = broadcast_id
+        record.source = source
         if record.status != "ACTIVE":
             raise ValueError("cannot receive new messages for a closed session")
     session.flush()
