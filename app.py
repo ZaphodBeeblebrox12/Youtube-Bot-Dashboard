@@ -21,6 +21,7 @@ from youtube_bot_dashboard.community_memory import (
     forget_viewer,
     review_memory_suggestion,
 )
+from youtube_bot_dashboard.chat_visibility import is_ai_whitelisted_for_display
 from youtube_bot_dashboard.live_queue import (
     BatchState,
     LiveAIRequestBatch,
@@ -437,17 +438,125 @@ elif page == "Settings":
     st.write("AI API keys/model IDs, prompt caching, provider-specific token counting and cleanup schedule will be added with their adapters and background worker.")
     st.caption("Keep Gemini and Qwen credentials in environment variables or secret storage, never in these ordinary settings fields.")
     st.code("python -m youtube_bot_dashboard.live_worker", language="bash")
-    st.caption("Run the worker as a separate background process after setting DATABASE_URL and the selected provider's credentials/model environment variables. For direct YouTube intake, configure the OAuth Desktop client, run python -m youtube_bot_dashboard.youtube_auth, then python -m youtube_bot_dashboard.youtube_listener. Real-broadcast verification is pending; the authenticated JSON bridge also remains available.")
+    st.caption("Run the worker as a separate background process after setting DATABASE_URL and the selected provider's credentials/model environment variables. For direct YouTube intake, configure the OAuth Desktop client, run python -m youtube_bot_dashboard.youtube_auth, then python -m youtube_bot_dashboard.youtube_listener. Real-broadcast veelif page == "Live Chat":
+    st.subheader("AI-whitelisted live chat")
+    st.caption(
+        "By default, a message appears only after the AI safety check clears it with high confidence "
+        "and Reply Finder selects it as useful or constructive. This is a private display filter; "
+        "it does not delete messages or restrict anyone on YouTube."
+    )
+    show_unfiltered = st.checkbox(
+        "Show unfiltered messages (includes pending, uncertain, flagged, and low-value chat)",
+        value=False,
+        key="show_unfiltered_live_chat",
+        help="Use only when you deliberately want to inspect raw incoming chat. It may include abusive or upsetting messages.",
+    )
 
-elif page == "Live Chat":
-    st.subheader("Live chat processing")
-    st.info("Messages can enter through the authenticated JSON bridge or the direct read-only YouTube streamList listener. The direct connector needs local OAuth setup and a real active-broadcast test before it is considered verified.")
     with db_session() as session:
-        rows = list(session.scalars(
-            select(LiveMessageTask).order_by(LiveMessageTask.queued_at.desc()).limit(100)
+        active_session_ids = list(session.scalars(
+            select(LiveSessionRecord.session_id)
+            .where(LiveSessionRecord.status == "ACTIVE")
+            .order_by(LiveSessionRecord.started_at.desc())
         ))
+        query = select(LiveMessageRecord)
+        if active_session_ids:
+            query = query.where(LiveMessageRecord.session_id.in_(active_session_ids))
+        else:
+            # When no stream is active, show the most recent session for review.
+            latest_session_id = session.scalar(
+                select(LiveMessageRecord.session_id)
+                .order_by(LiveMessageRecord.last_seen_at.desc())
+                .limit(1)
+            )
+            if latest_session_id:
+                query = query.where(LiveMessageRecord.session_id == latest_session_id)
+
+        messages = list(session.scalars(
+            query.order_by(LiveMessageRecord.first_seen_at.desc()).limit(100)
+        ))
+        tasks_by_key = {}
+        if messages:
+            message_ids = [message.message_id for message in messages]
+            tasks = list(session.scalars(
+                select(LiveMessageTask).where(LiveMessageTask.message_id.in_(message_ids))
+            ))
+            tasks_by_key = {(task.message_id, task.pipeline): task for task in tasks}
+
+        feed_items = []
+        for message in messages:
+            moderation_task = tasks_by_key.get((message.message_id, LivePipeline.MODERATION.value))
+            reply_task = tasks_by_key.get((message.message_id, LivePipeline.REPLY_FINDER.value))
+
+            def task_result(task):
+                if task is None:
+                    return {}
+                try:
+                    result = json.loads(task.result_json or "{}")
+                except (TypeError, json.JSONDecodeError):
+                    return {}
+                return result if isinstance(result, dict) else {}
+
+            moderation_result = task_result(moderation_task)
+            reply_result = task_result(reply_task)
+            approved, reason = is_ai_whitelisted_for_display(
+                moderation_state=moderation_task.state if moderation_task else None,
+                moderation_result=moderation_result,
+                reply_finder_state=reply_task.state if reply_task else None,
+                reply_finder_result=reply_result,
+            )
+            feed_items.append({
+                "message_id": message.message_id,
+                "username": message.username or "Unknown viewer",
+                "text": message.text,
+                "published_at": message.published_at or message.first_seen_at,
+                "approved": approved,
+                "reason": reason,
+                "moderation_state": moderation_task.state if moderation_task else "MISSING",
+                "reply_state": reply_task.state if reply_task else "MISSING",
+                "category": moderation_result.get("category", "PENDING"),
+            })
+
+    if show_unfiltered:
+        st.warning(
+            "Unfiltered view is on. Raw messages may include harmful, upsetting, uncertain, or unproductive content. "
+            "This only changes your private dashboard view; it does not change YouTube chat."
+        )
+        displayed_items = feed_items
+    else:
+        displayed_items = [item for item in feed_items if item["approved"]]
+
+    session_label = "active stream" if active_session_ids else "most recent session"
+    st.caption(
+        f"Showing {len(displayed_items)} message(s) from the {session_label} "
+        f"({len(feed_items)} recently ingested message(s) checked)."
+    )
+    if not feed_items:
+        st.info("No messages have been ingested for this session yet.")
+    elif not displayed_items:
+        if show_unfiltered:
+            st.info("No messages were found in the current feed.")
+        else:
+            st.info(
+                "No messages have passed both AI checks yet. Incoming messages remain hidden while checks are pending, "
+                "uncertain, flagged, or not selected as useful/constructive."
+            )
+    else:
+        for item in displayed_items:
+            message_time = item["published_at"].strftime("%H:%M:%S") if item["published_at"] else "Time unknown"
+            with st.container(border=True):
+                st.markdown(f"**{item['username']}** · {message_time}")
+                st.write(item["text"])
+                if show_unfiltered:
+                    if item["approved"]:
+                        st.caption("AI-whitelisted · safety cleared and selected as useful/constructive")
+                    else:
+                        st.caption(f"Hidden from default view: {item['reason']}")
+    with st.expander("Technical processing status (message text is not shown here)"):
+        with db_session() as session:
+            rows = list(session.scalars(
+                select(LiveMessageTask).order_by(LiveMessageTask.queued_at.desc()).limit(100)
+            ))
         if rows:
-            st.write("Latest per-message task states")
             st.dataframe([
                 {
                     "Message ID": task.message_id,
@@ -461,6 +570,9 @@ elif page == "Live Chat":
                 for task in rows
             ], use_container_width=True)
         else:
+            st.caption("No task records yet.")
+
+ else:
             st.caption("No live chat messages have been ingested yet.")
 
     st.divider()
