@@ -546,14 +546,15 @@ elif page == "Community Memory":
             for memory in saved_rows
         ], use_container_width=True, hide_index=True)
         memory_ids = [memory.id for memory in saved_rows]
+        memory_labels = {}
+        for memory in saved_rows:
+            owner = profiles_by_id.get(memory.user_channel_id)
+            owner_name = owner.display_name if owner and owner.display_name else "Unknown viewer"
+            memory_labels[memory.id] = f"{owner_name} · {memory.summary}"
         selected_memory = st.selectbox(
             "Forget a saved memory",
             options=memory_ids,
-            format_func=lambda memory_id: next(
-                (f"{next((p.display_name for p in profiles if p.user_channel_id == next(m.user_channel_id for m in saved_rows if m.id == memory_id)), 'Unknown viewer')} · "
-                 f"{next(m.summary for m in saved_rows if m.id == memory_id)}"),
-                ""
-            ),
+            format_func=lambda memory_id: memory_labels[memory_id],
         )
         if st.button("Forget selected memory"):
             with db_session() as session:
