@@ -733,13 +733,27 @@ def complete_live_batch(
         LiveMessageTask.batch_id == batch_id,
         LiveMessageTask.state == TaskState.SENT.value,
     )))
-    expected_ids = {task.message_id for task in tasks}
     completed = 0
     missing = 0
+    is_reply_finder = batch.pipeline == LivePipeline.REPLY_FINDER.value
     for task in tasks:
         item = result_by_message_id.get(task.message_id)
         if isinstance(item, dict):
             task.result_json = json.dumps(item, ensure_ascii=False)
+            task.state = TaskState.COMPLETED.value
+            task.completed_at = now
+            task.last_error = None
+            completed += 1
+        elif is_reply_finder:
+            # Reply Finder intentionally returns only selected messages.
+            # A valid response omitting a supplied ID means "not selected",
+            # not a failed classification. The caller must validate the shape
+            # and the selected IDs before calling this function.
+            task.result_json = json.dumps({
+                "message_id": task.message_id,
+                "selected": False,
+                "reason": "Not selected by Reply Finder.",
+            }, ensure_ascii=False)
             task.state = TaskState.COMPLETED.value
             task.completed_at = now
             task.last_error = None
