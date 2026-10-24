@@ -62,6 +62,7 @@ def test_default_live_config_is_two_seconds_and_round_robin(db):
     with factory() as session:
         config = get_live_queue_config(session)
         assert config.batch_delay_seconds == 2.0
+        assert config.minimum_request_interval_seconds == 1.0
         assert config.max_messages_per_batch == 100
         assert config.provider_strategy is ProviderStrategy.ROUND_ROBIN
         assert config.enabled_providers == (ProviderName.GEMINI, ProviderName.QWEN)
@@ -70,12 +71,14 @@ def test_default_live_config_is_two_seconds_and_round_robin(db):
 def test_dashboard_editable_live_settings_persist(db):
     _, factory = db
     with factory() as session:
-        config = LiveQueueConfig(batch_delay_seconds=3.5, max_messages_per_batch=50)
+        config = LiveQueueConfig(batch_delay_seconds=3.5, minimum_request_interval_seconds=0.75, max_messages_per_batch=50, session_shield_confidence_threshold=0.95)
         update_live_queue_config(session, config)
         session.commit()
     with factory() as session:
         saved = get_live_queue_config(session)
         assert saved.batch_delay_seconds == 3.5
+        assert saved.minimum_request_interval_seconds == 0.75
+        assert saved.session_shield_confidence_threshold == 0.95
         assert saved.max_messages_per_batch == 50
 
 
