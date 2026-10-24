@@ -155,6 +155,18 @@ def create_memory_suggestion(
     summary = summary[:240]
     follow_up = follow_up[:240]
 
+    # Cross-check the candidate against the real stored message, rather than
+    # trusting model-supplied identity or source references.
+    from youtube_bot_dashboard.live_queue import LiveMessageRecord
+
+    source_message = session.get(LiveMessageRecord, source_message_id)
+    if (
+        source_message is None
+        or source_message.user_channel_id != user_channel_id
+        or source_message.session_id != session_id
+    ):
+        return None
+
     profile = session.get(CommunityViewerProfile, user_channel_id)
     if profile is None:
         return None
