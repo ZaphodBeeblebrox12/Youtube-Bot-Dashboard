@@ -384,3 +384,22 @@ Minimum durable records and constraints:
 **Required tests:** persistence across process restart; same channel ID across renamed display names; duplicate webhook/message delivery; several offending messages in one session; same user across three different sessions; overturned incident removing/correcting the strike; new session and Session Shield expiry; and enforcing that dry-run mode never calls YouTube ban/delete endpoints.
 
 Raw chat retention should be configurable and proportionate. Store enough evidence to explain decisions without retaining unnecessary personal information indefinitely.
+
+
+## Two-sentence live response for medium/hard questions (decision: 2026-10-24)
+
+When the Reply Finder selects a question rated **MODERATE** or **DIFFICULT**, the AI must generate a concise, useful **exactly two-sentence suggested response** that the host can say aloud on stream. The response must appear directly beside the original question in the private dashboard so the host does not need to open YouTube chat or another tool.
+
+Requirements:
+- Exactly two complete sentences in the suggested live response (not counting a separate source list or caveat metadata shown outside that response).
+- Natural spoken English; clear, calm, and easy to deliver live. Avoid essay-style explanations, jargon dumps and overconfident predictions.
+- Answer the actual question directly, with the key mechanism or reasoning included; do not merely repeat or rephrase the question.
+- For questions about the host's own trading setup or methodology, use only documented/supplied methodology. Do not invent the host's rules, trade positions, opinions or personal experiences.
+- For general finance/macro questions, provide a balanced educational answer. Separate general mechanisms from forecasts; acknowledge material conditions or uncertainty within the two sentences where possible.
+- For current, time-sensitive, disputed, regulatory or research-dependent questions, retrieve and verify reliable sources before drafting. Display source links and any important caveat separately in the dashboard; never invent citations or facts.
+- For questions requiring individualized financial advice, missing key information, or facts that cannot be verified, provide a safe, transparent two-sentence response that explains the limitation or gives general educational context rather than guessing.
+- The host may read, edit mentally, or ignore the suggestion. Never automatically publish or speak the response.
+- If the AI cannot responsibly provide a substantive answer, still offer two sentences that acknowledge what is known and state what needs checking, or recommend skipping the question; mark low confidence visibly.
+- EASY questions may use the shorter response angle already defined; the exact two-sentence answer-generation requirement is mandatory for MODERATE and DIFFICULT questions.
+
+Validation must check that medium/hard suggestions contain exactly two sentences, answer the message, do not invent creator-specific details, and use source-backed verification where required.
