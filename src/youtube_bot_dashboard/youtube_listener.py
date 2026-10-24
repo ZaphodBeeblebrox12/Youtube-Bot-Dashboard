@@ -133,7 +133,7 @@ def _parse_timestamp(value: str | None) -> datetime | None:
         return None
 
 
-def extract_viewer_text(message) -> tuple[str, str | None, str | None, datetime | None] | None:
+def extract_viewer_text(message) -> tuple[str, str | None, str | None, datetime | None, bool | None] | None:
     """Extract only human-authored text/comment events, not system chat events."""
     snippet = message.snippet
     text = ""
@@ -154,16 +154,22 @@ def extract_viewer_text(message) -> tuple[str, str | None, str | None, datetime 
     author = getattr(message, "author_details", None)
     user_id = None
     username = None
+    is_member = None
     if author is not None:
         user_id = getattr(author, "channel_id", None) or None
         username = getattr(author, "display_name", None) or None
+        try:
+            if author.HasField("is_chat_sponsor"):
+                is_member = bool(getattr(author, "is_chat_sponsor", False))
+        except (AttributeError, ValueError):
+            is_member = None
     if not user_id:
         user_id = getattr(snippet, "author_channel_id", None) or None
     published_at = _parse_timestamp(getattr(snippet, "published_at", None))
     message_id = getattr(message, "id", None)
     if not message_id:
         return None
-    return text, user_id, username, published_at
+    return text, user_id, username, published_at, is_member
 
 
 def _cursor_key(live_chat_id: str) -> str:
@@ -197,6 +203,7 @@ def persist_stream_response(
                 live_chat_id=live_chat_id,
                 broadcast_id=broadcast_id,
                 started_at=utc_now(),
+                source="YOUTUBE_API",
             )
         elif live_session.status != "ACTIVE":
             raise RuntimeError("Received stream messages for a session already marked ended.")
@@ -205,7 +212,7 @@ def persist_stream_response(
             extracted = extract_viewer_text(item)
             if not extracted:
                 continue
-            text, user_id, username, published_at = extracted
+            text, user_id, username, published_at, is_member = extracted
             result = ingest_live_message(
                 session,
                 IncomingLiveMessage(
@@ -214,6 +221,7 @@ def persist_stream_response(
                     text=text,
                     user_channel_id=user_id,
                     username=username,
+                    is_member=is_member,
                     published_at=published_at,
                 ),
             )
@@ -246,7 +254,10 @@ def persist_stream_response(
 
 def _close_stale_sessions(session_factory, active_chat_ids: set[str]) -> None:
     with session_factory() as session:
-        rows = list(session.query(LiveSessionRecord).filter(LiveSessionRecord.status == "ACTIVE").all())
+        rows = list(session.query(LiveSessionRecord).filter(
+            LiveSessionRecord.status == "ACTIVE",
+            LiveSessionRecord.source == "YOUTUBE_API",
+        ).all())
         for row in rows:
             if row.live_chat_id and row.live_chat_id not in active_chat_ids:
                 close_session_shield(session, row.session_id, ended_at=utc_now())
@@ -334,6 +345,7 @@ def main() -> None:
                         live_chat_id=live_chat_id,
                         broadcast_id=broadcast_id,
                         started_at=utc_now(),
+                        source="YOUTUBE_API",
                     )
                     session.commit()
             try:
