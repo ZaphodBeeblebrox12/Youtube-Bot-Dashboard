@@ -63,13 +63,17 @@ Proposed initial severity bands (not calibrated): 0 no violation; 1–19 very mi
 
 ## Default escalation policy
 
-For confirmed qualifying offences by the same identifiable account:
-1. First offence: restrict until the current chat/session ends.
-2. Second offence: 7-day ban.
-3. Third offence: 30-day ban.
-4. Fourth offence: permanent ban.
+Name the first escalation stage **Level 1 — Session Timeout**.
 
-Clarify how “session” maps to the actual platform (intended: until current chat/event ends). Only the backend increments strikes. Deduplicate incidents so repeated messages within one spam burst do not automatically create multiple strikes. Keep evidence and reason for each action; provide moderator overrides and appeals, and handle overturned decisions in strike history.
+For confirmed qualifying offences by the same identifiable account:
+1. **Level 1 / first offence:** restriction lasts only until the current live chat/session ends. At the next session, the account is allowed again automatically if no new violation occurs.
+2. **Second qualifying offence:** 7-day ban.
+3. **Third qualifying offence:** 30-day ban.
+4. **Fourth qualifying offence:** permanent ban.
+
+The Level 1 restriction must expire at the actual session boundary; it must not accidentally become a permanent exclusion. Keep the offence/strike record after the timeout expires, because later confirmed offences escalate through the ladder. “Allowed again next session” means the old session-only restriction has expired; it does not erase offence history or protect new violations from escalation.
+
+The app must define session boundaries from the actual platform/stream lifecycle. Only the backend increments strikes. Deduplicate incidents so repeated messages within one spam burst do not automatically create multiple strikes. Keep evidence and reason for each action; provide moderator overrides and appeals, and handle overturned decisions in strike history.
 
 Critical cases such as credible threats, doxxing or clear credential theft/scams should trigger urgent review and appropriate platform-supported protective action; they should not have to wait for four strikes. Exact critical auto-enforcement thresholds remain to be designed and validated.
 
@@ -309,9 +313,11 @@ The owner wants to keep the chat open, including antagonistic participants where
 - The exclusion applies to the Reply Finder/answer-assistance path only. **The moderation pipeline continues to screen incoming chat independently** for spam, threats, scams and other policy violations, unless a separate explicit policy decision changes this. Reply exclusion must not silently disable safety monitoring or erase evidence.
 - Make exclusion reversible. The dashboard should show who is excluded, the reason, who/what added the exclusion, when it was added, and allow a moderator to remove it.
 - Prefer the stable platform-supplied user/channel ID as the exclusion key. Store display name/handle as a label only because names can change or collide. If there is no stable ID in the incoming JSON, use a clearly marked fallback key and do not claim identity certainty.
-- When the moderation/classification workflow identifies a user as a **high-confidence repeated-antagonist or ban candidate**, automatically add them to the Reply Finder exclusion list so their messages stop consuming Reply Finder tokens and do not appear in the host's attention queue. This is a reply-queue exclusion, **not an automatic ban**.
+- When the moderation/classification workflow identifies a user as a **high-confidence repeated-antagonist or ban candidate**, automatically add them to the Reply Finder exclusion list for the **remainder of the current live session only**. This stops their messages consuming Reply Finder tokens and keeps them out of the host's attention queue. This is a reply-queue exclusion, **not by itself a platform ban**.
+- The default “initial state” for this control is **Session-only exclusion** (also shown as “Session Shield” in the dashboard): at the next session boundary, the exclusion expires automatically and the user becomes eligible for the Reply Finder again, provided no new violation occurs. If the user repeats the behaviour in a later session, evaluate the new incident and apply the policy again.
+- This session-only Reply Finder exclusion is separate from formal platform sanctions. Formal sanction duration follows the **Level 1 — Session Timeout / 7-day / 30-day / permanent** escalation ladder above. A real Level 1 platform restriction also ends with the current session; offence history remains so a future confirmed offence can escalate.
 - Ambiguous/low-confidence cases should be flagged for review instead of automatically excluded. Never exclude a user solely because they express a bearish/bullish view, disagree respectfully, criticize the creator or ask a challenging good-faith question.
-- The owner should be able to add/remove exclusions manually, and reverse an automatic exclusion if it was a false positive. Record the reason, supporting incident references, confidence, source of the decision (AI or manual), and timestamp.
+- The owner should be able to add/remove exclusions manually, and reverse an automatic exclusion if it was a false positive. Record the reason, supporting incident references, confidence, source of the decision (AI or manual), timestamp and expiry/session ID.
 - Do not infer cross-account identity or apply one person's exclusion to a different account without reliable linking evidence.
 
 ### Pipeline sketch
