@@ -27,6 +27,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, Session, mapped_column
 
 from youtube_bot_dashboard.storage import Base, utc_now, text_hash
+from youtube_bot_dashboard.community_memory import record_viewer_activity
 
 
 class LivePipeline(StrEnum):
@@ -495,6 +496,13 @@ def ingest_live_message(
     )
     session.add(message)
     session.flush()
+    record_viewer_activity(
+        session,
+        user_channel_id=incoming.user_channel_id,
+        display_name=incoming.username,
+        session_id=incoming.session_id,
+        observed_at=now,
+    )
 
     mod_task = LiveMessageTask(
         message_id=incoming.message_id,
