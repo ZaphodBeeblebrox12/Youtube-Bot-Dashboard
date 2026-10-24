@@ -67,6 +67,7 @@ class BatchState(StrEnum):
 @dataclass(frozen=True, slots=True)
 class LiveQueueConfig:
     batch_delay_seconds: float = 2.0
+    minimum_request_interval_seconds: float = 1.0
     max_messages_per_batch: int = 100
     max_input_tokens: int = 12_000
     system_prompt_reserve_tokens: int = 3_000
@@ -79,6 +80,8 @@ class LiveQueueConfig:
     def __post_init__(self) -> None:
         if not math.isfinite(self.batch_delay_seconds) or not 0.25 <= self.batch_delay_seconds <= 30:
             raise ValueError("batch_delay_seconds must be between 0.25 and 30")
+        if not math.isfinite(self.minimum_request_interval_seconds) or not 0.1 <= self.minimum_request_interval_seconds <= 30:
+            raise ValueError("minimum_request_interval_seconds must be between 0.1 and 30")
         if not 1 <= self.max_messages_per_batch <= 500:
             raise ValueError("max_messages_per_batch must be between 1 and 500")
         if not 1_000 <= self.max_input_tokens <= 100_000:
@@ -246,6 +249,7 @@ def get_live_queue_config(session: Session) -> LiveQueueConfig:
     strategy_raw = get("live_provider_strategy", ProviderStrategy.ROUND_ROBIN.value)
     return LiveQueueConfig(
         batch_delay_seconds=float(get("live_batch_delay_seconds", "2.0")),
+        minimum_request_interval_seconds=float(get("live_minimum_request_interval_seconds", "1.0")),
         max_messages_per_batch=int(get("live_max_messages_per_batch", "100")),
         max_input_tokens=int(get("live_max_input_tokens", "12000")),
         system_prompt_reserve_tokens=int(get("live_system_prompt_reserve_tokens", "3000")),
@@ -261,6 +265,7 @@ def update_live_queue_config(session: Session, config: LiveQueueConfig) -> None:
     """Persist settings for the future dashboard settings form."""
     values = {
         "live_batch_delay_seconds": str(config.batch_delay_seconds),
+        "live_minimum_request_interval_seconds": str(config.minimum_request_interval_seconds),
         "live_max_messages_per_batch": str(config.max_messages_per_batch),
         "live_max_input_tokens": str(config.max_input_tokens),
         "live_system_prompt_reserve_tokens": str(config.system_prompt_reserve_tokens),
