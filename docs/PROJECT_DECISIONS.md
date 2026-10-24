@@ -1,7 +1,7 @@
 # YouTube Bot Dashboard — Project Decisions & Handoff
 
-**Updated:** 2026-10-24  
-**Status:** Planning decisions captured; implementation not yet started.  
+**Updated:** 2026-10-25  
+**Status:** Implementation active; local integration and live-broadcast verification pending.  
 **Repository:** https://github.com/ZaphodBeeblebrox12/Youtube-Bot-Dashboard
 
 This document is the source of truth for settled decisions. Update it when decisions evolve so work can resume across sessions.
@@ -723,7 +723,32 @@ The API is a normalized JSON ingestion bridge, not a direct YouTube client. It d
 
 - The live queue now persists a configurable **minimum AI request-start gap**, default **1 second**, separate from the configurable 2-second batch collection window. A single worker records the last request start timestamp in `app_settings` and waits before starting the next provider call. The initial worker is a single consumer; multi-worker deployment requires an atomic DB lease/rate-limit lock.
 - Settings now include batch delay, maximum messages (100 by default), estimated total input-token budget, system-prompt token reserve, request-start gap, provider selection strategy, and Session Shield confidence threshold (0.90 default).
-- The Reply Queue UI now presents one selected message at a time with the original viewer message, priority, difficulty, trading stance, a suggested live response/cue, research warning when applicable, and **Mark answered** / **Skip-d dismiss** actions. It never posts the response to YouTube.
+- The Reply Queue UI now presents one selected message at a time with the original viewer message, priority, difficulty, trading stance, a suggested live response/cue, research warning when applicable, and **Mark answered** / **Skip / dismiss** actions. It never posts the response to YouTube.
 - The Live Chat page lists active Session Shield exclusions and allows the owner to clear an internal filter for future messages. Clearing a shield does not requeue previously excluded messages. Existing users remain able to post publicly.
 - The authenticated JSON endpoint is in `src/youtube_bot_dashboard/ingest_api.py`, accepts `POST /api/v1/live/ingest` with `X-Ingest-Key`, and closes a session with `POST /api/v1/live/sessions/{session_id}/end`. Direct YouTube OAuth/polling is still not connected.
 - New tests cover provider response validation, request lifecycle, shield activation before a prepared reply batch is sent, JSON ingestion, duplicate ingestion and shielding. The repository has a CI workflow, but the connector has not returned workflow checks; test execution remains unverified in this environment.
+
+
+## Community Memory and glanceable live UX checkpoint (2026-10-25)
+
+The owner wants viewers—especially returning members and people who contribute thoughtful questions—to feel personally recognized, without creating another inbox or requiring the host to stare at a screen while speaking.
+
+### Settled behaviour
+
+- **Basic visit history:** Store profile activity only when the source supplies a stable viewer channel ID. Record first-seen, last-seen, distinct stream sessions, message count, display name, and membership only if explicitly supplied. Never merge people by display name or infer membership.
+- **Meaningful memory, not every question:** The Reply Finder prompt can propose a memory for an ongoing learning challenge, a goal, progress, a meaningful trading lesson, or a clear preference that would help the host follow up. A simple definition question such as “What is a support level?”, a generic market question, a greeting, generic praise, or spam should not be saved as a personal memory by itself.
+- **One efficient AI pass:** Community-memory consideration is included in the existing Reply Finder request rather than adding a separate AI call for every comment or batch. The backend validates the exact message ID and stable viewer ID, memory type, required text, and confidence before making a suggestion.
+- **Owner approval:** The AI produces a private suggestion; it does not automatically save a memory or speak a greeting. The owner can **Save memory** or **Skip** in the Community Memory workspace. Keep at most one pending suggestion and two saved memories per viewer. If a viewer already has two, do not silently replace either one.
+- **Brief on-air cue:** When a selected message comes from a returning viewer with a saved memory not yet used in this stream, show a compact cue with whether the source marked them as a member, stream count, first-seen date, one remembered detail, and a suggested follow-up. A single “Used this follow-up” action suppresses that memory cue for the rest of the current session. No automated public reply/greeting.
+- **Privacy controls:** Ordinary chat text is not copied into the community-memory table. The stored memory is a short neutral summary and optional follow-up. The owner can forget an individual saved memory or delete the viewer profile, visit history, and all related suggested/saved memories.
+- **Input-source compatibility:** Both the normalized JSON bridge and direct YouTube streamList source use the same live queue. JSON sources may optionally supply `is_member`; the direct YouTube protobuf reader reads the sponsor/member flag if the platform supplies it. Missing badge information stays unknown rather than being guessed.
+- **Verification:** Tests have been authored for profile history, source-ID matching, confidence gates, one pending suggestion, the two-memory cap, forget controls, prompt rules, and the Reply Finder-to-memory handoff. Tests have not yet been run/confirmed here. A real active YouTube broadcast is not available yet, so OAuth and stream delivery remain unverified.
+
+### Files touched
+
+- `src/youtube_bot_dashboard/community_memory.py`: profile/visit/memory persistence, source-message identity check, confidence and capacity rules, save/dismiss/forget actions.
+- `src/youtube_bot_dashboard/live_queue.py`: records viewer activity only for a stable channel ID and retains the optional membership status.
+- `src/youtube_bot_dashboard/prompts/reply_finder.py` and `live_worker.py`: ask for memory candidates within the existing selection request and persist only validated, private suggestions.
+- `app.py`: Community Memory review workspace and one-glance returning-viewer/member cue inside the Reply Queue.
+- `tests/test_community_memory.py`, `tests/test_live_worker.py`, and `tests/test_live_prompts.py`: new test cases.
+- `youtube_auth.py`, `youtube_listener.py`, and `stream_list.proto`: optional local read-only YouTube streamList connection; the protobuf field number for live_chat_id is aligned with the documented schema. A real stream remains untested.
