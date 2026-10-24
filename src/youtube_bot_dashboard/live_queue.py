@@ -387,7 +387,13 @@ def shield_user_for_session(
     tasks = list(session.scalars(select(LiveMessageTask).where(
         LiveMessageTask.session_id == session_id,
         LiveMessageTask.pipeline == LivePipeline.REPLY_FINDER.value,
-        LiveMessageTask.state.in_([TaskState.PENDING.value, TaskState.BATCHED.value, TaskState.FAILED_RETRYABLE.value]),
+        LiveMessageTask.state.in_([
+            TaskState.PENDING.value,
+            TaskState.BATCHED.value,
+            TaskState.SENT.value,
+            TaskState.FAILED_RETRYABLE.value,
+            TaskState.COMPLETED.value,
+        ]),
     )))
     for task in tasks:
         message = session.get(LiveMessageRecord, task.message_id)
@@ -405,10 +411,13 @@ def shield_user_for_session(
                         batch.status = BatchState.CANCELLED.value
                 except (TypeError, json.JSONDecodeError):
                     batch.status = BatchState.CANCELLED.value
+            # Also remove any still-queued/completed candidate from the private
+            # screen. The historical request/response remains in the audit record.
             task.state = TaskState.EXCLUDED_SHIELDED.value
             task.batch_id = None
             task.provider = None
-            task.last_error = "Excluded by Session Shield before Reply Finder request."
+            task.result_json = None
+            task.last_error = "Excluded by Session Shield from Reply Finder until this session ends."
     session.flush()
     return existing
 
