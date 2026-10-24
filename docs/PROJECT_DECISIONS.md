@@ -534,15 +534,59 @@ These are design recommendations for review, not new user-approved moderation or
 - Keep this edited-comment recheck as a separate queue and report it separately from genuinely new comments, so AI usage remains predictable.
 
 ### 3. Explicit negative-comment policy settings
-- Separate three independent judgements: **target** (creator, content, another commenter, market/third party, uncertain), **sentiment** (negative, neutral, positive, mixed), and **conduct type** (personal abuse, harassment, threat, doxxing/privacy violation, spam, scam, content criticism, respectful correction, off-topic commentary, satire/ambiguous).
-- **Negative sentiment about the creator's content is not, by itself, grounds for deletion.** Genuine criticism must stay published by default—even when blunt or strongly worded.
-- Explicit keep examples include: “This lesson is terrible and your explanation makes no sense”; “I think this explanation is wrong”; “This strategy is confusing”; factual corrections; reasoned disagreement; and negative opinions about market conditions. These can be negative about the creator/content while remaining legitimate feedback.
-- Distinguish criticism of work from personal abuse. “Your explanation makes no sense” critiques the explanation and should be kept. A direct degrading personal attack at the creator (for example, attacking their intelligence or using a personal slur) may be a deletion candidate depending on confidence and the approved rule settings. Do not classify second-person wording alone as a personal attack.
-- Split the default outcomes into: **KEEP** (genuine criticism, correction, opinion, or unrelated negative commentary); **REVIEW** (ambiguous target/tone, satire, mixed context, borderline insult, or uncertain AI classification); and **DELETION_CANDIDATE** (clear, high-confidence personal abuse, harassment, threat, privacy violation, spam/scam or other defined channel-rule violation directed at the relevant target).
-- A comment can have negative sentiment and still be KEEP. The AI must state a separate reason/type that explains why it is a rule violation, not merely say “negative”.
-- The initial workflow remains preview/review first. Deletion candidates are proposals only; no comment is deleted without owner approval. Any later auto-delete setting must be separate, disabled by default, and narrowly configured around clear violations—not general criticism.
-- Calibrate with examples and counterexamples before enabling any automatic deletion. Measure false positives specifically on legitimate critical feedback.
 
+Separate three independent judgements: **target**, **sentiment**, and **conduct type**. Do not collapse them into a single “negative” label.
+
+**Targets**
+- `CREATOR`: directly about the host as a person.
+- `CONTENT`: about the video, lesson, explanation, teaching, or other published work.
+- `CREATOR_AND_CONTENT`: about both.
+- `OTHER_TARGET`: about another commenter, market event, ticker, broker, public figure, or unrelated third party.
+- `UNCERTAIN`: the target cannot be identified confidently.
+
+**Sentiment**
+- `NEGATIVE`, `NEUTRAL`, `POSITIVE`, `MIXED`, or `UNCERTAIN`.
+- Sentiment describes emotional valence only. Negative sentiment is not itself a rule violation.
+
+**Conduct type**
+- `PERSONAL_ABUSE`: direct degrading personal insults/slurs aimed at the creator.
+- `HARASSMENT`: targeted, persistent or repeated abuse supported by context.
+- `THREAT`: threatening or intimidating conduct.
+- `DOXXING_PRIVACY`: disclosure of private personal information.
+- `SPAM_OR_SCAM`: spam or deceptive solicitation; only use when the content itself supports the label, not just because someone calls a lesson a scam.
+- `CONTENT_CRITICISM`: negative opinion or criticism of a video, lesson, explanation, strategy presentation or teaching quality.
+- `RESPECTFUL_CORRECTION`: correction, evidence-based challenge or reasoned disagreement.
+- `OFF_TOPIC_COMMENTARY`: negative sentiment about an unrelated market event/person/topic.
+- `SATIRE_OR_AMBIGUOUS`: sarcasm, jokes or unclear intent requiring context.
+- `OTHER` / `UNCERTAIN`: no supported specific class.
+
+**Default decision rules**
+1. **KEEP genuine criticism**, even when blunt or strongly negative. Explicit examples that must remain published by default include:
+   - “This lesson is terrible and your explanation makes no sense.”
+   - “I think this explanation is wrong.”
+   - “This strategy is confusing.”
+   - “Your analysis missed this point; here is why.”
+   - factual corrections, respectful disagreement and negative opinions about market conditions.
+2. Do not classify a comment as personal abuse merely because it says “you” or “your”. “Your explanation makes no sense” critiques the explanation, not the creator's worth or identity.
+3. **REVIEW** when target, tone, satire, intent or conduct type is ambiguous; the model confidence is below the configured threshold; or the comment combines legitimate critique with potentially abusive language. Do not silently delete these.
+4. **DELETION_CANDIDATE** only when the target is the creator/content (or both), and high-confidence evidence supports a separately defined violation such as personal abuse, harassment, a threat, a privacy violation, or another explicitly approved channel rule. Record the specific violation and evidence—not just “negative sentiment”.
+5. **KEEP** when the comment is negative about an unrelated market event, ticker, broker, third party or another viewer; the target is not the creator/content; or it is genuine criticism/correction without a separate violation.
+6. This is a *candidate* decision, not a deletion action. Historical cleanup begins in preview mode; the owner approves each item or an explicitly confirmed bulk set. No AI classification directly deletes comments.
+7. Keep a separate **general policy violation** flag for spam/scams that should be reviewed under a future/general comment-moderation rule. Do not smuggle unrelated spam/scam cleanup into the “negative feedback about me/content” rule without an explicit setting.
+8. Use configurable confidence thresholds and calibrate on labelled examples before any future automatic deletion. The default remains human approval; broad deletion of genuine negative feedback is not enabled.
+
+### Examples the policy must pass
+| Comment | Default decision | Why |
+|---|---|---|
+| “This lesson is terrible and your explanation makes no sense.” | KEEP | Blunt criticism of content; no separate abuse violation. |
+| “Your explanation is wrong because the chart shows the opposite.” | KEEP | Substantive correction/disagreement. |
+| “You are an idiot and should never teach anyone.” | REVIEW or DELETION_CANDIDATE depending on confidence and approved rules | Direct personal abuse, unlike criticism of the lesson. |
+| “NIFTY is terrible today.” | KEEP | Negative market opinion, not about the creator/content. |
+| “I disagree with your conclusion, here are three reasons.” | KEEP | Good-faith critique. |
+| “This course is a scam” with no further evidence/context | REVIEW | Could be a serious allegation or a dissatisfied opinion; context matters. |
+| Unclear sarcasm or a quote repeating an insult | REVIEW | Target and intent uncertain. |
+
+Use these examples and counterexamples in automated tests. Measure false positives specifically on legitimate critical feedback.
 ### 4. OAuth and credential safety
 - Use the minimum YouTube OAuth scopes required for each feature, and clearly show the connected channel identity.
 - Store refresh/access tokens in secret storage or encrypted at rest, never in source control or logs. Support reconnect/revoke, expiry handling and access checks.
