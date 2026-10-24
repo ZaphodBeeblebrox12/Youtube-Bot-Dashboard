@@ -29,7 +29,9 @@ pytest
 
 - [x] Project scaffold and test setup
 - [x] Conservative negative-comment decision gate
-- [ ] PostgreSQL schema and migrations
+- [x] SQLAlchemy persistence models for monitored videos, comments, and text versions
+- [x] Incremental comment upsert (new / unchanged / edited) and classification queue primitives
+- [ ] PostgreSQL production configuration, migrations, and concurrency hardening
 - [ ] YouTube OAuth and comment ingestion
 - [ ] Durable incremental sweeps and job checkpoints
 - [ ] Gemini/Qwen AI adapters and schema validation
