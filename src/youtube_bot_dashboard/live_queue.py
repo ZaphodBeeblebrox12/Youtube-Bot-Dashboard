@@ -590,7 +590,7 @@ def ingest_live_message(
         session_id=incoming.session_id,
         pipeline=LivePipeline.REPLY_FINDER.value,
         content_hash=digest,
-        state=TaskState.EXCLUDED_SHIELDED.value if excluded else TaskState.PENDING.value,
+        state=excluded_state,
         queued_at=now,
         last_error=excluded_reason,
     )
