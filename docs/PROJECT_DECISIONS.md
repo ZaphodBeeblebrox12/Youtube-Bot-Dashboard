@@ -71,7 +71,9 @@ If the owner later explicitly enables active enforcement, the planned ladder for
 3. Third qualifying offence: 30-day ban.
 4. Fourth qualifying offence: permanent ban.
 
-If enabled in the future, session-based restrictions must expire at the actual session boundary. Confirmed offence records and supporting evidence remain available so later incidents can be escalated. Define session boundaries from the actual platform/stream lifecycle. Deduplicate incidents so one spam burst does not automatically become multiple offences. Provide moderator override and appeal handling before enabling live enforcement.
+If enabled in the future, the first qualifying offence must use a **temporary YouTube live-chat ban scoped to the current live chat/session**, not a channel-wide/permanent ban. YouTube's Live Streaming API has separate `temporary` and `permanent` `liveChatBans` types; the resource identifies a particular `liveChatId`, and temporary bans accept `banDurationSeconds` (the documented default is 300 seconds). There is no dedicated API setting meaning “until this stream ends”, so implementation must map session scope to a supported temporary duration and verify behaviour against the live broadcast lifecycle. Never silently substitute a permanent ban if session duration cannot be determined; fail safely and require review.
+
+Confirmed offence records and supporting evidence remain available so later incidents can be escalated. Define session boundaries from the actual platform/stream lifecycle. Deduplicate incidents so one spam burst does not automatically become multiple offences. Provide moderator override and appeal handling before enabling live enforcement.
 
 Do not activate this ladder from AI configuration alone. It requires an explicit owner-controlled enforcement-mode change, documented settings, and testing.
 
