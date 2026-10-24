@@ -55,3 +55,27 @@ python -m youtube_bot_dashboard.live_worker
 - [ ] Active Moderation enforcement (future phase only)
 
 The project decision log in `docs/PROJECT_DECISIONS.md` is the source of truth for product decisions and future work.
+
+
+## External JSON source format
+
+The ingest bridge accepts a normalized batch at `POST /api/v1/live/ingest` with the secret in `X-Ingest-Key`. For example:
+
+```json
+{
+  "session_id": "your-live-session-id",
+  "live_chat_id": "youtube-live-chat-id",
+  "broadcast_id": "youtube-broadcast-id",
+  "messages": [
+    {
+      "message_id": "youtube-message-id",
+      "user_id": "youtube-channel-id",
+      "username": "Viewer",
+      "text": "Why can a breakout fail?",
+      "published_at": "2026-10-25T12:00:00Z"
+    }
+  ]
+}
+```
+
+Each message is stored once and queued independently for moderation and Reply Finder. Session Shield messages still enter the moderation pipeline but are removed from the Reply Finder payload before its AI call. Treat all message text as untrusted input. Do not expose `INGEST_API_KEY` to viewers or include it in client-side code.
