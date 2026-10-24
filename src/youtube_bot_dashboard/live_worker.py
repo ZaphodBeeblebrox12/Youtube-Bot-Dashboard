@@ -32,6 +32,7 @@ from youtube_bot_dashboard.live_queue import (
     get_live_queue_config,
     mark_live_batch_sent,
     prepare_due_batch,
+    shield_user_for_session,
 )
 from youtube_bot_dashboard.prompts.live_moderation import LIVE_MODERATION_SYSTEM_PROMPT
 from youtube_bot_dashboard.prompts.reply_finder import REPLY_FINDER_SYSTEM_PROMPT
@@ -178,6 +179,55 @@ def validate_reply_finder_response(parsed: dict, payload: dict) -> dict[str, dic
     return mapped
 
 
+def apply_session_shield_suggestions(
+    session,
+    *,
+    session_id: str,
+    payload: dict,
+    results_by_message_id: dict[str, dict],
+    confidence_threshold: float,
+) -> list[str]:
+    """Apply only the internal Reply Finder filter; this makes no YouTube API call."""
+    source_messages = {
+        item["message_id"]: item
+        for item in payload.get("messages", [])
+        if isinstance(item, dict) and isinstance(item.get("message_id"), str)
+    }
+    shieldable_categories = MODERATION_CATEGORIES - {"NO_VIOLATION", "UNCERTAIN"}
+    shielded_users: list[str] = []
+    for message_id, result in results_by_message_id.items():
+        source = source_messages.get(message_id)
+        if not source:
+            continue
+        user_id = source.get("user_id")
+        confidence = result.get("confidence")
+        category = result.get("category")
+        if (
+            not user_id
+            or not result.get("suggest_shield")
+            or category not in shieldable_categories
+            or isinstance(confidence, bool)
+            or not isinstance(confidence, (int, float))
+            or confidence < confidence_threshold
+        ):
+            continue
+        reason = (
+            f"Session Shield suggestion: {category}; "
+            f"message {message_id}; {str(result.get('explanation', 'High-confidence moderation classification'))[:600]}"
+        )
+        shield_user_for_session(
+            session,
+            session_id=session_id,
+            user_channel_id=user_id,
+            display_name=source.get("username"),
+            reason=reason,
+            source="AI",
+            confidence=float(confidence),
+        )
+        shielded_users.append(user_id)
+    return sorted(set(shielded_users))
+
+
 def _effective_config(config: LiveQueueConfig, registry: ProviderRegistry) -> LiveQueueConfig | None:
     available = registry.available()
     if config.provider_strategy is ProviderStrategy.ROUND_ROBIN:
@@ -215,6 +265,7 @@ def process_prepared_batch(session_factory, batch_id: str, registry: ProviderReg
             return {"batch_id": batch_id, "status": "SKIPPED"}
         provider_name = ProviderName(batch.provider)
         pipeline = LivePipeline(batch.pipeline)
+        session_id = batch.session_id
 
     try:
         adapter = registry.get(provider_name)
@@ -258,6 +309,15 @@ def process_prepared_batch(session_factory, batch_id: str, registry: ProviderReg
                 output_tokens=provider_result.output_tokens,
                 cached_input_tokens=provider_result.cached_input_tokens,
             )
+            shielded_users = []
+            if pipeline is LivePipeline.MODERATION:
+                shielded_users = apply_session_shield_suggestions(
+                    session,
+                    session_id=session_id,
+                    payload=payload,
+                    results_by_message_id=results_by_id,
+                    confidence_threshold=config.session_shield_confidence_threshold,
+                )
             session.commit()
         return {
             "batch_id": batch_id,
@@ -266,6 +326,7 @@ def process_prepared_batch(session_factory, batch_id: str, registry: ProviderReg
             "status": "PARTIAL" if missing else "COMPLETED",
             "completed_messages": completed,
             "retryable_messages": missing,
+            "session_shield_users_added": shielded_users if pipeline is LivePipeline.MODERATION else [],
             "input_tokens": provider_result.input_tokens,
             "output_tokens": provider_result.output_tokens,
             "cached_input_tokens": provider_result.cached_input_tokens,
