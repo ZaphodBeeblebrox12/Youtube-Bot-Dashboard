@@ -1,0 +1,287 @@
+"""Initial Streamlit control panel for live queue settings and processing status.
+
+This is an early-stage dashboard scaffold. YouTube OAuth and live ingestion are
+not wired yet, and this UI cannot ban, mute, timeout, delete, or publish anything.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+from contextlib import contextmanager
+
+import streamlit as st
+from sqlalchemy import func, select
+
+from youtube_bot_dashboard.live_queue import (
+    BatchState,
+    LiveAIRequestBatch,
+    LiveMessageRecord,
+    LiveMessageTask,
+    LivePipeline,
+    LiveQueueConfig,
+    ProviderName,
+    ProviderStrategy,
+    TaskState,
+    get_live_queue_config,
+    update_live_queue_config,
+)
+from youtube_bot_dashboard.storage import create_engine_and_sessions, create_schema
+
+
+st.set_page_config(
+    page_title="YouTube Bot Dashboard",
+    page_icon="🛡️",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
+
+
+@st.cache_resource
+def get_database():
+    database_url = os.environ.get("DATABASE_URL", "sqlite:///./youtube_bot_dashboard.db")
+    engine, sessions = create_engine_and_sessions(database_url)
+    create_schema(engine)
+    return engine, sessions
+
+
+engine, SessionFactory = get_database()
+
+
+@contextmanager
+def db_session():
+    session = SessionFactory()
+    try:
+        yield session
+    finally:
+        session.close()
+
+
+def read_counts(session):
+    total_messages = session.scalar(select(func.count()).select_from(LiveMessageRecord)) or 0
+    total_tasks = session.scalar(select(func.count()).select_from(LiveMessageTask)) or 0
+    pending = session.scalar(
+        select(func.count()).select_from(LiveMessageTask).where(
+            LiveMessageTask.state.in_([
+                TaskState.PENDING.value,
+                TaskState.BATCHED.value,
+                TaskState.SENT.value,
+                TaskState.FAILED_RETRYABLE.value,
+            ])
+        )
+    ) or 0
+    total_batches = session.scalar(select(func.count()).select_from(LiveAIRequestBatch)) or 0
+    return total_messages, total_tasks, pending, total_batches
+
+
+st.title("YouTube Bot Dashboard")
+st.caption("Private live-stream control room · Early implementation scaffold")
+
+with st.sidebar:
+    st.header("Moderation levers")
+    st.success("Lever 1 · Session Shield")
+    st.caption("Internal Reply Finder filter only. People remain free to chat on YouTube.")
+    st.warning("Lever 2 · Active Moderation is OFF")
+    st.caption("No YouTube bans, timeouts, mutes or deletions are connected in this version.")
+    page = st.radio(
+        "Workspace",
+        ["Overview", "Live Chat", "Reply Queue", "Settings", "Past Videos Cleanup"],
+        index=0,
+    )
+
+if page == "Overview":
+    with db_session() as session:
+        messages, tasks, pending, batches = read_counts(session)
+        current_config = get_live_queue_config(session)
+
+    st.subheader("System overview")
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Messages stored", messages)
+    c2.metric("Pipeline tasks", tasks)
+    c3.metric("Pending / in-flight", pending)
+    c4.metric("Batches recorded", batches)
+
+    st.subheader("Live queue configuration")
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Batch window", f"{current_config.batch_delay_seconds:g} sec")
+    col2.metric("Batch message cap", current_config.max_messages_per_batch)
+    col3.metric("Provider routing", current_config.provider_strategy.value.replace("_", " ").title())
+
+    st.info(
+        "YouTube OAuth and live chat ingestion are not connected yet. "
+        "This screen reports persisted local/development records only."
+    )
+    st.subheader("Safety status")
+    st.write("Session Shield: ready in policy code; no public YouTube action.")
+    st.write("Active Moderation: disabled and not wired to enforcement APIs.")
+    st.write("Past Videos Cleanup: policy and incremental-storage foundations exist; YouTube connection/scheduler are not connected.")
+
+elif page == "Settings":
+    st.subheader("Live AI queue settings")
+    st.write(
+        "These settings are persisted in the database. The default live batch window is 2 seconds. "
+        "The worker will flush a batch when the time window expires, the message cap is reached, "
+        "or the estimated input-token budget would be exceeded."
+    )
+    with db_session() as session:
+        config = get_live_queue_config(session)
+
+    with st.form("live_queue_settings"):
+        batch_delay = st.number_input(
+            "Batch delay (seconds)",
+            min_value=0.25,
+            max_value=30.0,
+            value=float(config.batch_delay_seconds),
+            step=0.25,
+            help="Default: 2 seconds. A partial batch is flushed when its oldest message reaches this age.",
+        )
+        max_messages = st.number_input(
+            "Maximum messages per batch",
+            min_value=1,
+            max_value=500,
+            value=int(config.max_messages_per_batch),
+            step=1,
+        )
+        max_tokens = st.number_input(
+            "Approximate total input-token budget",
+            min_value=1000,
+            max_value=100000,
+            value=int(config.max_input_tokens),
+            step=1000,
+            help="Includes a reserved allowance for the system prompt. Provider-specific token counting will replace estimates where available.",
+        )
+        prompt_reserve = st.number_input(
+            "Reserved tokens for system prompt",
+            min_value=0,
+            max_value=int(max_tokens) - 101,
+            value=min(int(config.system_prompt_reserve_tokens), int(max_tokens) - 101),
+            step=250,
+            help="Keeps room for the long instructions and output-format contract.",
+        )
+        providers = st.multiselect(
+            "Providers available for testing",
+            options=[ProviderName.GEMINI, ProviderName.QWEN],
+            default=list(config.enabled_providers),
+            format_func=lambda provider: provider.value.title(),
+        )
+        strategy = st.selectbox(
+            "Provider selection strategy",
+            options=[
+                ProviderStrategy.ROUND_ROBIN,
+                ProviderStrategy.GEMINI_ONLY,
+                ProviderStrategy.QWEN_ONLY,
+            ],
+            index=[
+                ProviderStrategy.ROUND_ROBIN,
+                ProviderStrategy.GEMINI_ONLY,
+                ProviderStrategy.QWEN_ONLY,
+            ].index(config.provider_strategy),
+            format_func=lambda option: {
+                ProviderStrategy.ROUND_ROBIN: "Alternate batches between enabled providers",
+                ProviderStrategy.GEMINI_ONLY: "Gemini only",
+                ProviderStrategy.QWEN_ONLY: "Qwen only",
+            }[option],
+            help="Round-robin advances independently for moderation and reply-finder queues to compare each task type fairly.",
+        )
+        max_attempts = st.number_input(
+            "Maximum provider attempts per batch item",
+            min_value=1,
+            max_value=10,
+            value=int(config.max_attempts),
+            step=1,
+        )
+        save = st.form_submit_button("Save live queue settings", type="primary")
+
+    if save:
+        try:
+            new_config = LiveQueueConfig(
+                batch_delay_seconds=float(batch_delay),
+                max_messages_per_batch=int(max_messages),
+                max_input_tokens=int(max_tokens),
+                system_prompt_reserve_tokens=int(prompt_reserve),
+                provider_strategy=strategy,
+                enabled_providers=tuple(providers),
+                max_attempts=int(max_attempts),
+                retry_base_seconds=config.retry_base_seconds,
+            )
+            with db_session() as session:
+                update_live_queue_config(session, new_config)
+                session.commit()
+            st.success("Settings saved. New batches will use the updated configuration.")
+        except (ValueError, TypeError) as exc:
+            st.error(f"Settings were not saved: {exc}")
+
+    st.divider()
+    st.subheader("Not yet configurable here")
+    st.write("AI API keys/model IDs, prompt caching, provider-specific token counting and cleanup schedule will be added with their adapters and background worker.")
+    st.caption("Keep Gemini and Qwen credentials in environment variables or secret storage, never in these ordinary settings fields.")
+
+elif page == "Live Chat":
+    st.subheader("Live chat processing")
+    st.info("The queue data model and batching primitives are in place, but YouTube OAuth/live chat ingestion and the background worker are not connected yet.")
+    with db_session() as session:
+        rows = list(session.scalars(
+            select(LiveMessageTask).order_by(LiveMessageTask.queued_at.desc()).limit(100)
+        ))
+        if rows:
+            st.write("Latest per-message tasks")
+            st.dataframe([
+                {
+                    "Message ID": task.message_id,
+                    "Pipeline": task.pipeline,
+                    "State": task.state,
+                    "Provider": task.provider or "Not assigned",
+                    "Attempts": task.attempt_count,
+                    "Queued at": task.queued_at,
+                    "Last error": task.last_error,
+                }
+                for task in rows
+            ], use_container_width=True)
+        else:
+            st.caption("No live chat messages have been ingested yet.")
+
+elif page == "Reply Queue":
+    st.subheader("Private Reply Finder queue")
+    st.info("This view will show selected questions and two-sentence suggested spoken answers after the live worker/provider adapters are connected.")
+    with db_session() as session:
+        rows = session.execute(
+            select(LiveMessageRecord, LiveMessageTask)
+            .join(LiveMessageTask, LiveMessageTask.message_id == LiveMessageRecord.message_id)
+            .where(
+                LiveMessageTask.pipeline == LivePipeline.REPLY_FINDER.value,
+                LiveMessageTask.state == TaskState.COMPLETED.value,
+            )
+            .order_by(LiveMessageTask.completed_at.desc())
+            .limit(100)
+        ).all()
+        shown = []
+        for message, task in rows:
+            try:
+                result = json.loads(task.result_json or "{}")
+            except json.JSONDecodeError:
+                result = {}
+            if result.get("selected"):
+                shown.append({
+                    "Message": message.text,
+                    "Username": message.username or "Unknown",
+                    "Priority": result.get("priority", "—"),
+                    "Stance": result.get("trading_stance", "—"),
+                    "Ease": result.get("ease_to_answer", "—"),
+                    "Provider": task.provider or "Unknown",
+                })
+        if shown:
+            st.dataframe(shown, use_container_width=True, hide_index=True)
+        else:
+            st.caption("No selected messages are available yet. Shielded users' messages are filtered before Reply Finder requests are built.")
+
+elif page == "Past Videos Cleanup":
+    st.subheader("Past Videos Cleanup")
+    st.write("Daily sweep default: 9:00 PM Asia/Kolkata")
+    st.info(
+        "The saved design calls for a rolling 20-day window per video and database-based deduplication. "
+        "The YouTube OAuth connection, scheduler and comment-listing API are not connected yet."
+    )
+    st.write("Deletion mode: Preview and owner approval first.")
+    st.write("Auto-delete: OFF.")
+
+st.sidebar.caption("Database: " + ("DATABASE_URL configured" if os.environ.get("DATABASE_URL") else "local SQLite development database"))
