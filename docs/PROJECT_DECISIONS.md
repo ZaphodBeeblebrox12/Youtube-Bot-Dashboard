@@ -75,7 +75,7 @@ Confirmed strike records and supporting evidence must persist across stream sess
 
 Do not activate this policy from AI configuration alone. It requires an explicit owner-controlled enforcement-mode change, documented settings, and tested database-backed strike tracking.
 
-Critical cases such as credible threats, doxxing or clear credential theft/scams should trigger urgent review and appropriate platform-supported protective action; they should not have to wait for four strikes. Exact critical auto-enforcement thresholds remain to be designed and validated.
+In **Lever 2 — Active Moderation** only, the future rulebook must define how critical cases such as credible threats, doxxing or clear credential theft/scams are handled, including urgent review and any approved enforcement override. In **Lever 1 — Session Shield**, these cases may be logged and surfaced for the owner's review, but must not trigger bans, timeouts, mutes or message deletion.
 
 ## Ban-evasion scope
 
@@ -334,13 +334,32 @@ The owner wants to keep the chat open, including antagonistic participants where
 - Test name changes for users with stable IDs, missing IDs, manual un-exclusion, and false-positive exclusions.
 
 
-## Explicit launch mode: Session Shield only (decision: 2026-10-24)
+## Two moderation levers: Session Shield and Active Moderation (decision: 2026-10-24)
 
-**Initial mode is non-punitive. Session Shield is not a ban, timeout, chat restriction or deletion.** A user added to Session Shield remains able to participate in YouTube chat. The only immediate effect is that their messages are filtered out in backend code before they are sent to the Reply Finder, for the remainder of the current live session. At the next session boundary, they become eligible for the Reply Finder again unless they are flagged again in that new session.
+The dashboard must have two distinct, clearly labelled modes. Do not mix their effects or imply Session Shield is a punishment.
 
-The initial version can detect and log likely rule violations, store supporting message evidence, identify repeat antagonism, and use that result to activate Session Shield. It must not call YouTube enforcement endpoints or apply punitive actions. Make this unmistakable in UI wording: “Excluded from reply suggestions until this session ends” rather than “banned”, “timed out” or “restricted”.
+### Lever 1 — Session Shield (initial mode)
 
-Keep future active enforcement as a separate, disabled mode that the owner may choose to enable later as the channel grows. When building that future mode, include explicit settings and a confirmation step before any real sanctions are issued, plus dry-run/preview testing, audit logs, appeals and override mechanisms. The planned session / 7-day / 30-day / permanent escalation ladder belongs to that future mode only.
+**No one is banned, muted, timed out, or prevented from chatting.** The purpose is to preserve chat activity while protecting the host's attention and saving AI tokens.
+
+- The moderation/classification pipeline can identify and log likely violations and repeated antagonism, with supporting evidence.
+- A high-confidence flagged user is excluded from the Reply Finder before their messages are sent to that AI. This keeps their messages out of the host's private answer queue and saves Reply Finder tokens.
+- The user remains fully able to participate in YouTube chat. This lever must not call YouTube ban, timeout, mute, or message-deletion APIs.
+- Session Shield exclusions expire at the end of the current live session. At the next session, the user can enter the Reply Finder again unless flagged anew.
+- UI wording must say “Excluded from reply suggestions until this session ends”, never “banned”, “muted”, “timed out” or “restricted”.
+- Session Shield is not a strike, sanction, or evidence of guilt. A candidate incident may be stored for later review, but only a confirmed offence under the future approved rulebook can count toward strikes.
+
+### Lever 2 — Active Moderation (future mode; actual bans)
+
+This is the separate mode the owner may activate later when the channel is ready for stricter enforcement. **This is the lever that actually bans users.** It must remain off during initial launch.
+
+- Before enabling, the owner must approve the detailed enforcement rulebook, strike criteria, session definitions, confidence/evidence thresholds, critical-case handling, appeals and post-first-ban escalation.
+- The planned threshold for the first actual ban is three confirmed, evidence-backed session strikes in three distinct live sessions for the same stable YouTube channel ID. Multiple messages in one live session cannot count as strikes from different sessions.
+- The first actual ban after that threshold is intended to be temporary and scoped to the current live chat/session, not permanent. Verify the exact API duration/session lifecycle before implementation; fail safely rather than falling back to a permanent ban.
+- Later escalation (potentially 7-day, 30-day, then permanent) remains provisional until the owner finalizes it.
+- Active Moderation must include explicit owner-controlled enablement, a confirmation step, dry-run preview, audit logs, appeals/overrides and a kill switch. No enforcement API calls are permitted unless this lever is deliberately enabled.
+
+The database should collect durable evidence/session history without automatically turning a Session Shield exclusion into a strike or ban.
 
 
 ## Future enforcement rulebook — required before enabling bans (backlog, 2026-10-24)
