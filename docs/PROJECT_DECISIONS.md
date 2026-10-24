@@ -255,3 +255,44 @@ The dashboard should remain the single work surface:
 ### Validation scenarios
 
 Test straightforward educational questions, hard macro questions, current central-bank/economic questions, creator-specific trading-method questions, questions requiring current sources, ambiguous questions, personalized investing requests, disputed claims, and questions for which reliable evidence cannot be found. Measure factuality and citation quality separately from whether the question is worth surfacing.
+
+
+## Gemini 3.5 Flash-Lite cost and capability baseline (estimate, 2026-10-24)
+
+Exact model ID: `gemini-3.5-flash-lite`. The official Gemini Developer API pricing page currently lists standard paid pricing of **$0.30 per 1 million input tokens** and **$2.50 per 1 million output tokens**. Prices can change; verify before launch. Official model documentation describes it as low-latency/cost, optimized for high-throughput tasks and structured output, with a 1,048,576-token input limit and 65,536-token output limit. These general specs do not guarantee moderation accuracy.
+
+### Working estimate for 10,000 chat messages
+
+Planning baseline, not a bill quote:
+- Average short chat message: approximately 8–12 words.
+- Serialized JSON record (message text plus available ID/name/timestamp and JSON overhead): estimate 25–45 tokens; use 30 tokens as central case.
+- 10,000 messages = about 300,000 record-input tokens in the central case.
+- Batch size = 25 messages; 400 batches per classifier.
+- Estimate about 1,500 prompt/instruction tokens per call for each classifier: 600,000 prompt tokens per classifier.
+- Both moderation and Reply Finder process the messages, but responses should be compact: moderation returns supported incidents rather than verbose prose for every message; Reply Finder returns selected items only.
+- Allow additional targeted answer-brief generation for a limited set of difficult/general-finance or macro questions, not for every chat message.
+
+Central estimate:
+- Input: (300k message tokens + 600k instructions) x 2 classifiers = approximately 1.8 million input tokens => about $0.54.
+- Classifier outputs: budget approximately 220k total output tokens across both systems => about $0.55.
+- Targeted answer briefs for selected hard questions and normal overhead/retries => roughly $0.15–$0.75, depending on how many are answered and how long the briefs are.
+- Indicative total for 10,000 messages: **around $1.25–$2.00**, with a prudent initial budgeting range of **$1–$3 per 10,000 messages** for short-to-average chat, compact JSON and only a small number of answer briefs.
+- Longer comments, extensive context, verbose output, retries, or asking for answer briefs on most selected messages can push cost above this range. Track actual API usage and token counts to replace assumptions with measured costs after a pilot.
+
+Do not assume 10,000 messages always means the same cost. Cost is based on actual input/output tokens and extra tools/search calls. The Google Gemini Batch API has separate discounted pricing for eligible offline processing, but the live-stream path needs low latency and should be budgeted at standard pricing unless its delay is acceptable. Google Search grounding/tool use should be limited to selected questions that require current evidence, rather than run for every chat message; check the current grounding terms and charges at launch.
+
+### Capability assessment — provisional hypothesis to test
+
+Expected to be a good inexpensive first-pass model for:
+- clear personal attacks, spam/flooding, obvious scam/promotion and clear non-violations;
+- structured JSON classification and extracting message IDs/evidence;
+- explicit bullish/bearish/neutral stance tagging;
+- prioritizing simple, answerable questions and identifying when a message is likely difficult.
+
+More likely to need help/context or a stronger-model/review fallback for:
+- sarcasm, in-jokes, coded insults, multilingual slang or conflicts spanning many messages;
+- distinguishing targeted harassment from heated but legitimate disagreement;
+- uncertain or conditional market views;
+- difficult macroeconomic answers, current facts, disputed claims or anything needing careful sourcing.
+
+Use deterministic rules for duplicate/flood detection where possible. Start dry-run and evaluate on a labelled set of actual chat examples (including false positives and edge cases). Do not claim a universal accuracy percentage in advance. For difficult/current finance questions, use source-backed retrieval and show the citations in the private dashboard; the generated answer remains a draft for the host, never an auto-published response.
