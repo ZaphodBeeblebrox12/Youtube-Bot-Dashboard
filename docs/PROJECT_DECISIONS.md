@@ -63,19 +63,17 @@ Proposed initial severity bands (not calibrated): 0 no violation; 1–19 very mi
 
 ## Future ban policy (not enabled in initial mode)
 
-The following escalation ladder is a **future option**, not the initial launch behaviour. Initial launch mode must not issue YouTube bans, timeouts, or other enforcement actions.
+The following is a **future option**, not the initial launch behaviour. Initial launch mode must not issue YouTube bans, timeouts, or other enforcement actions.
 
-If the owner later explicitly enables active enforcement, the planned ladder for confirmed qualifying offences by the same identifiable account is:
-1. First qualifying offence: restriction until the current live session ends.
-2. Second qualifying offence: 7-day ban.
-3. Third qualifying offence: 30-day ban.
-4. Fourth qualifying offence: permanent ban.
+**First actual ban threshold: three confirmed session strikes across three distinct live sessions.** A user must have a qualifying, evidence-backed strike in each of three different sessions before the first formal ban can be applied. Multiple messages or separate incidents within the same live session do not count as strikes from different sessions; at most one session strike per user per session should count toward this threshold. The same stable YouTube channel ID must be used to link that user's history across sessions.
 
-If enabled in the future, the first qualifying offence must use a **temporary YouTube live-chat ban scoped to the current live chat/session**, not a channel-wide/permanent ban. YouTube's Live Streaming API has separate `temporary` and `permanent` `liveChatBans` types; the resource identifies a particular `liveChatId`, and temporary bans accept `banDurationSeconds` (the documented default is 300 seconds). There is no dedicated API setting meaning “until this stream ends”, so implementation must map session scope to a supported temporary duration and verify behaviour against the live broadcast lifecycle. Never silently substitute a permanent ban if session duration cannot be determined; fail safely and require review.
+When active enforcement is explicitly enabled in a future phase, the first ban after those three distinct-session strikes should be **temporary and scoped to the current live chat/session**, not permanent. YouTube's Live Streaming API supports separate `temporary` and `permanent` `liveChatBans` types; a ban identifies a specific `liveChatId`, and temporary bans accept `banDurationSeconds` (documented default: 300 seconds). There is no dedicated API setting meaning “until this stream ends”, so implementation must map the session scope to a supported temporary duration and verify behaviour against the broadcast lifecycle. Never silently substitute a permanent ban if duration or session state cannot be determined; fail safely and require review.
 
-Confirmed offence records and supporting evidence remain available so later incidents can be escalated. Define session boundaries from the actual platform/stream lifecycle. Deduplicate incidents so one spam burst does not automatically become multiple offences. Provide moderator override and appeal handling before enabling live enforcement.
+**The post-first-ban escalation durations/counts are not finalized.** The earlier proposal of 7-day, 30-day and permanent stages remains a draft for the future rulebook, not an active or final policy. Preserve evidence and session-strike history so the owner can define those later.
 
-Do not activate this ladder from AI configuration alone. It requires an explicit owner-controlled enforcement-mode change, documented settings, and testing.
+Confirmed strike records and supporting evidence must persist across stream sessions. Define session boundaries from actual platform/broadcast lifecycle data. Deduplicate incidents so one spam burst does not become multiple session strikes. Provide moderator review/override and appeal handling before enabling live enforcement.
+
+Do not activate this policy from AI configuration alone. It requires an explicit owner-controlled enforcement-mode change, documented settings, and tested database-backed strike tracking.
 
 Critical cases such as credible threats, doxxing or clear credential theft/scams should trigger urgent review and appropriate platform-supported protective action; they should not have to wait for four strikes. Exact critical auto-enforcement thresholds remain to be designed and validated.
 
@@ -355,7 +353,7 @@ Before turning on any ban/timeout API actions, design and obtain the owner's app
 2. **Evidence standard:** require exact source message IDs and supporting text/context; distinguish observed facts from AI interpretation. Define minimum confidence and when moderator review is required.
 3. **Severity and action mapping:** define which rule breaches qualify for a strike, the minimum severity/confidence for automatic action, and which cases may warrant urgent protective review. An AI score alone must never trigger a permanent ban.
 4. **Strike counting and deduplication:** define one incident versus repeated incidents; do not count every message in a spam burst as a separate offence. Define when separate messages form one harassment incident and how overturned cases affect strike history.
-5. **Escalation ladder:** planned future stages are first qualifying offence = current-session timeout; second = 7 days; third = 30 days; fourth = permanent. Confirm how session boundaries work on the actual platform and whether/how strikes expire before launch.
+5. **Escalation ladder:** first actual ban only after confirmed strikes in three distinct live sessions; that initial ban is temporary/session-scoped. The post-first-ban progression (potentially 7 days, 30 days, permanent) remains provisional and must be explicitly finalized. Decide whether strikes expire and define session boundaries before launch.
 6. **Critical violations:** define precisely how credible threats, doxxing, credential theft and clear scams are handled, including whether immediate platform protection is permitted, review expectations, and how to avoid auto-banning from uncertain accusations.
 7. **Fairness and protected discussion:** do not sanction respectful disagreement, bearish/bullish views, criticism of the creator or teaching, good-faith questions, jokes without harmful context, quotations/reporting of abuse, or a losing trade by themselves.
 8. **Repeated antagonism and user exclusions:** separate Session Shield (hides a user from the Reply Finder for the current session) from formal sanctions. Do not treat a Reply Finder exclusion as a strike or ban. Do not infer ban evasion across accounts without reliable linking evidence.
@@ -363,3 +361,26 @@ Before turning on any ban/timeout API actions, design and obtain the owner's app
 10. **Safety rollout and controls:** explicit owner-controlled enablement, dry-run/pre-enforcement report, staged rollout, kill switch, audit logs, monitoring, and tests. No enforcement API call until the feature is deliberately enabled and tests have passed.
 
 Treat this rulebook as a release gate: until it is written, reviewed, tested against labelled chat examples and explicitly approved by the owner, the application must remain in non-punitive launch mode.
+
+
+## Persistent database requirement (decision: 2026-10-24)
+
+Because the same user’s confirmed strikes must be counted across **three distinct live sessions**, durable database storage is required. In-memory dictionaries or a JSON file are not adequate for production: process restarts or multiple workers must not erase or corrupt a user's history.
+
+**Recommended direction:** PostgreSQL for deployed use; SQLite may be used for local development/tests only if the data layer and tests preserve the same constraints. Select the production host/managed database after inspecting the eventual deployment environment. Database migrations must be version-controlled.
+
+Minimum durable records and constraints:
+- **Live sessions/broadcasts:** YouTube broadcast ID and liveChatId, start/end timestamps, lifecycle status. Each message and each session strike must link to a known session record.
+- **Users:** stable YouTube channel ID as the primary external identity; current/previous display-name labels and first/last seen timestamps. Do not key strike history only by display name.
+- **Messages/evidence:** YouTube message ID, session ID, user/channel ID, timestamp, message text or permitted retained excerpt, and relevant raw metadata according to a configurable retention policy. Deduplicate by source message ID.
+- **Moderation incidents:** category, model/provider/version, severity, confidence, explanation, evidence message IDs, review/confirmation status, and created/overturned timestamps.
+- **Session strikes:** user ID, distinct session ID, confirmed qualifying incident reference, status and timestamp. Enforce a uniqueness constraint on (user_id, session_id) for qualifying session strikes so repeated messages/incidents in one session cannot inflate the “three different live sessions” threshold.
+- **Reply Finder exclusions / Session Shield:** user ID, session ID, reason, source (AI or manual), supporting incident references, created/expiry times and cleared state. These exclusions are separate from formal strikes and bans.
+- **Sanctions (future mode only):** sanction type, relevant liveChatId, start/end time or duration, triggering strike/case, YouTube API response/ban ID, status, and reversal/appeal information. No sanction record may cause an API call while enforcement mode is disabled.
+- **Audit events and model usage:** moderation/reply decisions, manual overrides, appeals, model IDs, batch sizes, input/output token counts, latency, retry/error outcomes and estimated cost.
+
+**Strike logic:** a strike counts only after the qualifying incident is confirmed under the eventual approved rulebook. In initial mode, store candidate incidents and review outcomes, but do not issue sanctions. At most one qualifying session strike per user per distinct live session can count toward the first-ban threshold. The first formal ban is eligible only after the database contains confirmed strikes for three distinct session IDs for the same stable YouTube channel ID.
+
+**Required tests:** persistence across process restart; same channel ID across renamed display names; duplicate webhook/message delivery; several offending messages in one session; same user across three different sessions; overturned incident removing/correcting the strike; new session and Session Shield expiry; and enforcing that dry-run mode never calls YouTube ban/delete endpoints.
+
+Raw chat retention should be configurable and proportionate. Store enough evidence to explain decisions without retaining unnecessary personal information indefinitely.
