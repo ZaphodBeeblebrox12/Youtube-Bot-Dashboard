@@ -1,0 +1,770 @@
+"""Persistent live-chat batching, per-message tracking, and provider routing.
+
+This module does not make network calls. A worker prepares a due batch, marks it
+sent, invokes the selected provider adapter, then stores the validated response.
+Session Shield only filters the Reply Finder pipeline; moderation stays separate.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
+from enum import StrEnum
+import json
+import math
+import uuid
+
+from sqlalchemy import (
+    Boolean,
+    DateTime,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    select,
+)
+from sqlalchemy.orm import Mapped, Session, mapped_column
+
+from youtube_bot_dashboard.storage import Base, utc_now, text_hash
+
+
+class LivePipeline(StrEnum):
+    MODERATION = "MODERATION"
+    REPLY_FINDER = "REPLY_FINDER"
+
+
+class ProviderName(StrEnum):
+    GEMINI = "GEMINI"
+    QWEN = "QWEN"
+
+
+class ProviderStrategy(StrEnum):
+    ROUND_ROBIN = "ROUND_ROBIN"
+    GEMINI_ONLY = "GEMINI_ONLY"
+    QWEN_ONLY = "QWEN_ONLY"
+
+
+class TaskState(StrEnum):
+    PENDING = "PENDING"
+    BATCHED = "BATCHED"
+    SENT = "SENT"
+    COMPLETED = "COMPLETED"
+    FAILED_RETRYABLE = "FAILED_RETRYABLE"
+    FAILED_FINAL = "FAILED_FINAL"
+    EXCLUDED_SHIELDED = "EXCLUDED_SHIELDED"
+
+
+class BatchState(StrEnum):
+    PREPARED = "PREPARED"
+    SENT = "SENT"
+    COMPLETED = "COMPLETED"
+    PARTIAL = "PARTIAL"
+    FAILED = "FAILED"
+    CANCELLED = "CANCELLED"
+
+
+@dataclass(frozen=True, slots=True)
+class LiveQueueConfig:
+    batch_delay_seconds: float = 2.0
+    max_messages_per_batch: int = 100
+    max_input_tokens: int = 12_000
+    provider_strategy: ProviderStrategy = ProviderStrategy.ROUND_ROBIN
+    enabled_providers: tuple[ProviderName, ...] = (ProviderName.GEMINI, ProviderName.QWEN)
+    max_attempts: int = 3
+    retry_base_seconds: int = 2
+
+    def __post_init__(self) -> None:
+        if not math.isfinite(self.batch_delay_seconds) or not 0.25 <= self.batch_delay_seconds <= 30:
+            raise ValueError("batch_delay_seconds must be between 0.25 and 30")
+        if not 1 <= self.max_messages_per_batch <= 500:
+            raise ValueError("max_messages_per_batch must be between 1 and 500")
+        if not 1_000 <= self.max_input_tokens <= 100_000:
+            raise ValueError("max_input_tokens must be between 1000 and 100000")
+        if self.max_attempts < 1 or self.retry_base_seconds < 1:
+            raise ValueError("retry settings must be positive")
+        if not self.enabled_providers:
+            raise ValueError("at least one AI provider must be enabled")
+        if len(set(self.enabled_providers)) != len(self.enabled_providers):
+            raise ValueError("enabled_providers cannot contain duplicates")
+        if self.provider_strategy is ProviderStrategy.GEMINI_ONLY and ProviderName.GEMINI not in self.enabled_providers:
+            raise ValueError("GEMINI_ONLY requires Gemini to be enabled")
+        if self.provider_strategy is ProviderStrategy.QWEN_ONLY and ProviderName.QWEN not in self.enabled_providers:
+            raise ValueError("QWEN_ONLY requires Qwen to be enabled")
+
+
+class LiveSessionRecord(Base):
+    __tablename__ = "live_sessions"
+
+    session_id: Mapped[str] = mapped_column(String(120), primary_key=True)
+    live_chat_id: Mapped[str | None] = mapped_column(String(160), unique=True, nullable=True)
+    broadcast_id: Mapped[str | None] = mapped_column(String(160), nullable=True, index=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+    ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    status: Mapped[str] = mapped_column(String(24), default="ACTIVE", nullable=False, index=True)
+
+
+class SessionShieldRecord(Base):
+    __tablename__ = "session_shield_users"
+    __table_args__ = (
+        UniqueConstraint("session_id", "user_channel_id", name="uq_shield_session_user"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    session_id: Mapped[str] = mapped_column(ForeignKey("live_sessions.session_id", ondelete="CASCADE"), index=True, nullable=False)
+    user_channel_id: Mapped[str] = mapped_column(String(120), nullable=False, index=True)
+    display_name: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    source: Mapped[str] = mapped_column(String(24), default="AI", nullable=False)
+    confidence: Mapped[float | None] = mapped_column(nullable=True)
+    created_by: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+    active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+
+
+class LiveMessageRecord(Base):
+    __tablename__ = "live_messages"
+
+    message_id: Mapped[str] = mapped_column(String(160), primary_key=True)
+    session_id: Mapped[str] = mapped_column(ForeignKey("live_sessions.session_id", ondelete="CASCADE"), index=True, nullable=False)
+    user_channel_id: Mapped[str | None] = mapped_column(String(120), nullable=True, index=True)
+    username: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    text: Mapped[str] = mapped_column(Text, nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+
+
+class LiveAIRequestBatch(Base):
+    __tablename__ = "live_ai_request_batches"
+
+    batch_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    session_id: Mapped[str] = mapped_column(ForeignKey("live_sessions.session_id", ondelete="CASCADE"), index=True, nullable=False)
+    pipeline: Mapped[str] = mapped_column(String(24), index=True, nullable=False)
+    provider: Mapped[str] = mapped_column(String(24), nullable=False)
+    model_id: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    status: Mapped[str] = mapped_column(String(24), default=BatchState.PREPARED.value, nullable=False, index=True)
+    payload_json: Mapped[str] = mapped_column(Text, nullable=False)
+    response_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    input_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    output_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class LiveMessageTask(Base):
+    __tablename__ = "live_message_tasks"
+    __table_args__ = (
+        UniqueConstraint("message_id", "pipeline", "content_hash", name="uq_live_message_pipeline_version"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    message_id: Mapped[str] = mapped_column(ForeignKey("live_messages.message_id", ondelete="CASCADE"), index=True, nullable=False)
+    session_id: Mapped[str] = mapped_column(ForeignKey("live_sessions.session_id", ondelete="CASCADE"), index=True, nullable=False)
+    pipeline: Mapped[str] = mapped_column(String(24), index=True, nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    state: Mapped[str] = mapped_column(String(32), default=TaskState.PENDING.value, nullable=False, index=True)
+    batch_id: Mapped[str | None] = mapped_column(ForeignKey("live_ai_request_batches.batch_id", ondelete="SET NULL"), nullable=True, index=True)
+    provider: Mapped[str | None] = mapped_column(String(24), nullable=True)
+    result_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    attempt_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    queued_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False, index=True)
+    next_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class AppSettingRecord(Base):
+    __tablename__ = "app_settings"
+
+    key: Mapped[str] = mapped_column(String(120), primary_key=True)
+    value: Mapped[str] = mapped_column(Text, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False)
+
+
+class ProviderRouteState(Base):
+    __tablename__ = "provider_route_state"
+
+    route_key: Mapped[str] = mapped_column(String(60), primary_key=True)
+    next_index: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False)
+
+
+@dataclass(frozen=True, slots=True)
+class IncomingLiveMessage:
+    message_id: str
+    session_id: str
+    text: str
+    user_channel_id: str | None = None
+    username: str | None = None
+    published_at: datetime | None = None
+
+    def __post_init__(self) -> None:
+        if not self.message_id.strip():
+            raise ValueError("message_id must not be empty")
+        if not self.session_id.strip():
+            raise ValueError("session_id must not be empty")
+
+
+@dataclass(frozen=True, slots=True)
+class IngestResult:
+    created: bool
+    message_id: str
+    moderation_task_id: int | None
+    reply_task_id: int | None
+    reply_excluded_by_shield: bool
+
+
+@dataclass(frozen=True, slots=True)
+class PreparedLiveBatch:
+    batch_id: str
+    session_id: str
+    pipeline: LivePipeline
+    provider: ProviderName
+    message_ids: tuple[str, ...]
+    payload: dict
+
+
+def get_live_queue_config(session: Session) -> LiveQueueConfig:
+    """Load dashboard-editable settings, defaulting to a 2-second live window."""
+    def get(key: str, default: str) -> str:
+        row = session.get(AppSettingRecord, key)
+        return row.value if row else default
+
+    providers_raw = json.loads(get("live_enabled_providers", '["GEMINI","QWEN"]'))
+    strategy_raw = get("live_provider_strategy", ProviderStrategy.ROUND_ROBIN.value)
+    return LiveQueueConfig(
+        batch_delay_seconds=float(get("live_batch_delay_seconds", "2.0")),
+        max_messages_per_batch=int(get("live_max_messages_per_batch", "100")),
+        max_input_tokens=int(get("live_max_input_tokens", "12000")),
+        provider_strategy=ProviderStrategy(strategy_raw),
+        enabled_providers=tuple(ProviderName(p) for p in providers_raw),
+        max_attempts=int(get("live_max_attempts", "3")),
+        retry_base_seconds=int(get("live_retry_base_seconds", "2")),
+    )
+
+
+def update_live_queue_config(session: Session, config: LiveQueueConfig) -> None:
+    """Persist settings for the future dashboard settings form."""
+    values = {
+        "live_batch_delay_seconds": str(config.batch_delay_seconds),
+        "live_max_messages_per_batch": str(config.max_messages_per_batch),
+        "live_max_input_tokens": str(config.max_input_tokens),
+        "live_provider_strategy": config.provider_strategy.value,
+        "live_enabled_providers": json.dumps([p.value for p in config.enabled_providers]),
+        "live_max_attempts": str(config.max_attempts),
+        "live_retry_base_seconds": str(config.retry_base_seconds),
+    }
+    for key, value in values.items():
+        row = session.get(AppSettingRecord, key)
+        if row is None:
+            session.add(AppSettingRecord(key=key, value=value))
+        else:
+            row.value = value
+            row.updated_at = utc_now()
+    session.flush()
+
+
+def register_live_session(
+    session: Session,
+    *,
+    session_id: str,
+    live_chat_id: str | None = None,
+    broadcast_id: str | None = None,
+    started_at: datetime | None = None,
+) -> LiveSessionRecord:
+    if not session_id.strip():
+        raise ValueError("session_id must not be empty")
+    record = session.get(LiveSessionRecord, session_id)
+    if record is None:
+        record = LiveSessionRecord(
+            session_id=session_id,
+            live_chat_id=live_chat_id,
+            broadcast_id=broadcast_id,
+            started_at=started_at or utc_now(),
+            status="ACTIVE",
+        )
+        session.add(record)
+    else:
+        if live_chat_id is not None:
+            record.live_chat_id = live_chat_id
+        if broadcast_id is not None:
+            record.broadcast_id = broadcast_id
+        if record.status != "ACTIVE":
+            raise ValueError("cannot receive new messages for a closed session")
+    session.flush()
+    return record
+
+
+def end_live_session(session: Session, session_id: str, *, ended_at: datetime | None = None) -> None:
+    record = session.get(LiveSessionRecord, session_id)
+    if record is None:
+        raise ValueError(f"unknown session_id {session_id!r}")
+    record.status = "ENDED"
+    record.ended_at = ended_at or utc_now()
+    session.flush()
+
+
+def is_user_shielded(session: Session, *, session_id: str, user_channel_id: str | None) -> bool:
+    if not user_channel_id:
+        return False
+    statement = select(SessionShieldRecord.id).where(
+        SessionShieldRecord.session_id == session_id,
+        SessionShieldRecord.user_channel_id == user_channel_id,
+        SessionShieldRecord.active.is_(True),
+    )
+    return session.scalar(statement) is not None
+
+
+def shield_user_for_session(
+    session: Session,
+    *,
+    session_id: str,
+    user_channel_id: str,
+    reason: str,
+    source: str = "AI",
+    confidence: float | None = None,
+    display_name: str | None = None,
+    created_by: str | None = None,
+) -> SessionShieldRecord:
+    """Internally exclude a user from Reply Finder; never call YouTube mute APIs."""
+    if not user_channel_id.strip():
+        raise ValueError("user_channel_id must not be empty")
+    if not reason.strip():
+        raise ValueError("reason must not be empty")
+    if confidence is not None and not 0 <= confidence <= 1:
+        raise ValueError("confidence must be between 0 and 1")
+    if session.get(LiveSessionRecord, session_id) is None:
+        raise ValueError(f"unknown session_id {session_id!r}")
+
+    existing = session.scalar(select(SessionShieldRecord).where(
+        SessionShieldRecord.session_id == session_id,
+        SessionShieldRecord.user_channel_id == user_channel_id,
+    ))
+    if existing is None:
+        existing = SessionShieldRecord(
+            session_id=session_id,
+            user_channel_id=user_channel_id,
+            display_name=display_name,
+            reason=reason,
+            source=source,
+            confidence=confidence,
+            created_by=created_by,
+            active=True,
+        )
+        session.add(existing)
+    else:
+        existing.active = True
+        existing.reason = reason
+        existing.source = source
+        existing.confidence = confidence
+        existing.display_name = display_name or existing.display_name
+        existing.created_by = created_by or existing.created_by
+    session.flush()
+
+    # Drop all unsent Reply Finder tasks from the payload path. If a batch was
+    # prepared but not sent, scrub the message from the serialized request too.
+    tasks = list(session.scalars(select(LiveMessageTask).where(
+        LiveMessageTask.session_id == session_id,
+        LiveMessageTask.pipeline == LivePipeline.REPLY_FINDER.value,
+        LiveMessageTask.state.in_([TaskState.PENDING.value, TaskState.BATCHED.value, TaskState.FAILED_RETRYABLE.value]),
+    )))
+    for task in tasks:
+        message = session.get(LiveMessageRecord, task.message_id)
+        if message and message.user_channel_id == user_channel_id:
+            batch = session.get(LiveAIRequestBatch, task.batch_id) if task.batch_id else None
+            if batch and batch.status == BatchState.PREPARED.value:
+                try:
+                    payload = json.loads(batch.payload_json)
+                    payload["messages"] = [
+                        item for item in payload.get("messages", [])
+                        if item.get("message_id") != task.message_id
+                    ]
+                    batch.payload_json = json.dumps(payload, ensure_ascii=False)
+                    if not payload["messages"]:
+                        batch.status = BatchState.CANCELLED.value
+                except (TypeError, json.JSONDecodeError):
+                    batch.status = BatchState.CANCELLED.value
+            task.state = TaskState.EXCLUDED_SHIELDED.value
+            task.batch_id = None
+            task.provider = None
+            task.last_error = "Excluded by Session Shield before Reply Finder request."
+    session.flush()
+    return existing
+
+
+def unshield_user_for_session(
+    session: Session,
+    *,
+    session_id: str,
+    user_channel_id: str,
+) -> bool:
+    record = session.scalar(select(SessionShieldRecord).where(
+        SessionShieldRecord.session_id == session_id,
+        SessionShieldRecord.user_channel_id == user_channel_id,
+        SessionShieldRecord.active.is_(True),
+    ))
+    if record is None:
+        return False
+    record.active = False
+    session.flush()
+    return True
+
+
+def ingest_live_message(
+    session: Session,
+    incoming: IncomingLiveMessage,
+    *,
+    received_at: datetime | None = None,
+) -> IngestResult:
+    """Persist once and enqueue distinct moderation/reply tasks."""
+    live_session = session.get(LiveSessionRecord, incoming.session_id)
+    if live_session is None:
+        raise ValueError(f"unknown session_id {incoming.session_id!r}")
+    if live_session.status != "ACTIVE":
+        raise ValueError("cannot ingest messages for an ended session")
+
+    now = received_at or utc_now()
+    digest = text_hash(incoming.text)
+    existing = session.get(LiveMessageRecord, incoming.message_id)
+    if existing is not None:
+        if existing.session_id != incoming.session_id:
+            raise ValueError("message_id already exists under a different session")
+        if existing.content_hash != digest:
+            # Live messages should be immutable. Update the stored text to
+            # prevent stale content being submitted on a still-pending task.
+            existing.text = incoming.text
+            existing.content_hash = digest
+        existing.last_seen_at = now
+        session.flush()
+        tasks = list(session.scalars(select(LiveMessageTask).where(
+            LiveMessageTask.message_id == incoming.message_id,
+        )))
+        mod_task = next((t for t in tasks if t.pipeline == LivePipeline.MODERATION.value), None)
+        reply_task = next((t for t in tasks if t.pipeline == LivePipeline.REPLY_FINDER.value), None)
+        return IngestResult(False, incoming.message_id, mod_task.id if mod_task else None,
+                            reply_task.id if reply_task else None,
+                            reply_task is not None and reply_task.state == TaskState.EXCLUDED_SHIELDED.value)
+
+    message = LiveMessageRecord(
+        message_id=incoming.message_id,
+        session_id=incoming.session_id,
+        user_channel_id=incoming.user_channel_id,
+        username=incoming.username,
+        text=incoming.text,
+        content_hash=digest,
+        published_at=incoming.published_at,
+        first_seen_at=now,
+        last_seen_at=now,
+    )
+    session.add(message)
+    session.flush()
+
+    mod_task = LiveMessageTask(
+        message_id=incoming.message_id,
+        session_id=incoming.session_id,
+        pipeline=LivePipeline.MODERATION.value,
+        content_hash=digest,
+        state=TaskState.PENDING.value,
+        queued_at=now,
+    )
+    session.add(mod_task)
+
+    excluded = is_user_shielded(
+        session, session_id=incoming.session_id, user_channel_id=incoming.user_channel_id
+    )
+    reply_task = LiveMessageTask(
+        message_id=incoming.message_id,
+        session_id=incoming.session_id,
+        pipeline=LivePipeline.REPLY_FINDER.value,
+        content_hash=digest,
+        state=TaskState.EXCLUDED_SHIELDED.value if excluded else TaskState.PENDING.value,
+        queued_at=now,
+        last_error="Excluded by Session Shield before Reply Finder request." if excluded else None,
+    )
+    session.add(reply_task)
+    session.flush()
+    return IngestResult(True, incoming.message_id, mod_task.id, reply_task.id, excluded)
+
+
+def should_flush_batch(
+    *,
+    pending_count: int,
+    oldest_queued_at: datetime | None,
+    now: datetime,
+    config: LiveQueueConfig,
+) -> bool:
+    """Flush when full or when the oldest message reaches the configured delay."""
+    if pending_count <= 0:
+        return False
+    if pending_count >= config.max_messages_per_batch:
+        return True
+    if oldest_queued_at is None:
+        return False
+    elapsed = (now - oldest_queued_at).total_seconds()
+    return elapsed >= config.batch_delay_seconds
+
+
+def _select_next_provider(
+    session: Session,
+    *,
+    pipeline: LivePipeline,
+    config: LiveQueueConfig,
+) -> ProviderName:
+    if config.provider_strategy is ProviderStrategy.GEMINI_ONLY:
+        return ProviderName.GEMINI
+    if config.provider_strategy is ProviderStrategy.QWEN_ONLY:
+        return ProviderName.QWEN
+    route_key = f"live:{pipeline.value}"
+    state = session.get(ProviderRouteState, route_key, with_for_update=True)
+    if state is None:
+        state = ProviderRouteState(route_key=route_key, next_index=0)
+        session.add(state)
+        session.flush()
+    index = state.next_index % len(config.enabled_providers)
+    provider = config.enabled_providers[index]
+    state.next_index = (index + 1) % len(config.enabled_providers)
+    state.updated_at = utc_now()
+    session.flush()
+    return provider
+
+
+def prepare_due_batch(
+    session: Session,
+    *,
+    session_id: str,
+    pipeline: LivePipeline,
+    config: LiveQueueConfig,
+    now: datetime | None = None,
+) -> PreparedLiveBatch | None:
+    """Claim a due batch and persist the exact provider/payload before network IO.
+
+    A worker should commit this transaction, mark the batch SENT, then call the
+    selected provider. For production multi-worker use, add a PostgreSQL
+    SKIP LOCKED claim transaction/migration before running multiple consumers.
+    """
+    timestamp = now or utc_now()
+
+    tasks = list(session.scalars(select(LiveMessageTask).where(
+        LiveMessageTask.session_id == session_id,
+        LiveMessageTask.pipeline == pipeline.value,
+        LiveMessageTask.state.in_([TaskState.PENDING.value, TaskState.FAILED_RETRYABLE.value]),
+        (LiveMessageTask.next_attempt_at.is_(None)) | (LiveMessageTask.next_attempt_at <= timestamp),
+    ).order_by(LiveMessageTask.queued_at, LiveMessageTask.id).limit(config.max_messages_per_batch)))
+
+    if pipeline is LivePipeline.REPLY_FINDER:
+        eligible = []
+        for task in tasks:
+            message = session.get(LiveMessageRecord, task.message_id)
+            if message and is_user_shielded(session, session_id=session_id, user_channel_id=message.user_channel_id):
+                task.state = TaskState.EXCLUDED_SHIELDED.value
+                task.batch_id = None
+                task.provider = None
+                task.last_error = "Excluded by Session Shield before Reply Finder request."
+            else:
+                eligible.append(task)
+        tasks = eligible
+        session.flush()
+
+    if not tasks:
+        return None
+
+    if not should_flush_batch(
+        pending_count=len(tasks),
+        oldest_queued_at=tasks[0].queued_at,
+        now=timestamp,
+        config=config,
+    ):
+        return None
+
+    provider = _select_next_provider(session, pipeline=pipeline, config=config)
+    batch_id = str(uuid.uuid4())
+    messages = []
+    claimed_tasks = []
+    for task in tasks:
+        message = session.get(LiveMessageRecord, task.message_id)
+        if message is None:
+            task.state = TaskState.FAILED_FINAL.value
+            task.last_error = "Live message record is missing."
+            continue
+        messages.append({
+            "message_id": message.message_id,
+            "user_id": message.user_channel_id,
+            "username": message.username,
+            "published_at": message.published_at.isoformat() if message.published_at else None,
+            "text": message.text,
+        })
+        claimed_tasks.append(task)
+
+    if not claimed_tasks:
+        session.flush()
+        return None
+
+    payload = {
+        "session_id": session_id,
+        "pipeline": pipeline.value,
+        "messages": messages,
+    }
+    batch = LiveAIRequestBatch(
+        batch_id=batch_id,
+        session_id=session_id,
+        pipeline=pipeline.value,
+        provider=provider.value,
+        status=BatchState.PREPARED.value,
+        payload_json=json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
+        created_at=timestamp,
+    )
+    session.add(batch)
+    session.flush()
+    for task in claimed_tasks:
+        task.state = TaskState.BATCHED.value
+        task.batch_id = batch_id
+        task.provider = provider.value
+        task.last_error = None
+    session.flush()
+    return PreparedLiveBatch(
+        batch_id=batch_id,
+        session_id=session_id,
+        pipeline=pipeline,
+        provider=provider,
+        message_ids=tuple(m["message_id"] for m in messages),
+        payload=payload,
+    )
+
+
+def mark_live_batch_sent(
+    session: Session,
+    batch_id: str,
+    *,
+    model_id: str,
+    sent_at: datetime | None = None,
+) -> None:
+    batch = session.get(LiveAIRequestBatch, batch_id)
+    if batch is None:
+        raise ValueError(f"unknown batch_id {batch_id!r}")
+    if batch.status != BatchState.PREPARED.value:
+        raise ValueError(f"cannot send batch in state {batch.status}")
+    now = sent_at or utc_now()
+    batch.status = BatchState.SENT.value
+    batch.model_id = model_id
+    batch.sent_at = now
+    tasks = list(session.scalars(select(LiveMessageTask).where(
+        LiveMessageTask.batch_id == batch_id,
+        LiveMessageTask.state == TaskState.BATCHED.value,
+    )))
+    for task in tasks:
+        task.state = TaskState.SENT.value
+        task.attempt_count += 1
+        task.sent_at = now
+    session.flush()
+
+
+def complete_live_batch(
+    session: Session,
+    batch_id: str,
+    *,
+    result_by_message_id: dict[str, dict],
+    raw_response: dict,
+    input_tokens: int | None = None,
+    output_tokens: int | None = None,
+    completed_at: datetime | None = None,
+) -> tuple[int, int]:
+    """Persist per-message results; missing results become retryable, not lost."""
+    batch = session.get(LiveAIRequestBatch, batch_id)
+    if batch is None:
+        raise ValueError(f"unknown batch_id {batch_id!r}")
+    if batch.status != BatchState.SENT.value:
+        raise ValueError(f"cannot complete batch in state {batch.status}")
+    now = completed_at or utc_now()
+    batch.response_json = json.dumps(raw_response, ensure_ascii=False)
+    batch.input_tokens = input_tokens
+    batch.output_tokens = output_tokens
+    batch.completed_at = now
+
+    tasks = list(session.scalars(select(LiveMessageTask).where(
+        LiveMessageTask.batch_id == batch_id,
+        LiveMessageTask.state == TaskState.SENT.value,
+    )))
+    expected_ids = {task.message_id for task in tasks}
+    completed = 0
+    missing = 0
+    for task in tasks:
+        item = result_by_message_id.get(task.message_id)
+        if isinstance(item, dict):
+            task.result_json = json.dumps(item, ensure_ascii=False)
+            task.state = TaskState.COMPLETED.value
+            task.completed_at = now
+            task.last_error = None
+            completed += 1
+        else:
+            task.state = TaskState.FAILED_RETRYABLE.value
+            task.next_attempt_at = now + timedelta(seconds=2 ** max(task.attempt_count - 1, 0))
+            task.batch_id = None
+            task.last_error = "AI response omitted this message ID; retry only this message."
+            missing += 1
+    # Extra/unknown IDs are ignored; only original batched IDs can be completed.
+    batch.status = BatchState.PARTIAL.value if missing else BatchState.COMPLETED.value
+    session.flush()
+    return completed, missing
+
+
+def fail_live_batch(
+    session: Session,
+    batch_id: str,
+    *,
+    error: str,
+    config: LiveQueueConfig,
+    failed_at: datetime | None = None,
+) -> tuple[int, int]:
+    """Fail a provider request and schedule bounded retries for its items."""
+    batch = session.get(LiveAIRequestBatch, batch_id)
+    if batch is None:
+        raise ValueError(f"unknown batch_id {batch_id!r}")
+    if batch.status not in {BatchState.PREPARED.value, BatchState.SENT.value}:
+        raise ValueError(f"cannot fail batch in state {batch.status}")
+    now = failed_at or utc_now()
+    batch.status = BatchState.FAILED.value
+    batch.completed_at = now
+    batch.last_error = error[:4000]
+    tasks = list(session.scalars(select(LiveMessageTask).where(
+        LiveMessageTask.batch_id == batch_id,
+        LiveMessageTask.state.in_([TaskState.BATCHED.value, TaskState.SENT.value]),
+    )))
+    retryable = 0
+    final = 0
+    for task in tasks:
+        task.batch_id = None
+        task.last_error = error[:4000]
+        if task.attempt_count >= config.max_attempts:
+            task.state = TaskState.FAILED_FINAL.value
+            final += 1
+        else:
+            task.state = TaskState.FAILED_RETRYABLE.value
+            wait_seconds = min(60, config.retry_base_seconds * (2 ** max(task.attempt_count - 1, 0)))
+            task.next_attempt_at = now + timedelta(seconds=wait_seconds)
+            retryable += 1
+    session.flush()
+    return retryable, final
+
+
+def close_session_shield(session: Session, session_id: str, *, ended_at: datetime | None = None) -> None:
+    """End the session and close all session-specific Shield exclusions."""
+    end_live_session(session, session_id, ended_at=ended_at)
+    shields = list(session.scalars(select(SessionShieldRecord).where(
+        SessionShieldRecord.session_id == session_id,
+        SessionShieldRecord.active.is_(True),
+    )))
+    for shield in shields:
+        shield.active = False
+    session.flush()
+
+
+def estimate_message_tokens(payload: dict) -> int:
+    """Conservative rough estimate; use provider tokenizer/count endpoint in production."""
+    text = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    # A deliberately conservative heuristic, not a substitute for model token counting.
+    return max(1, math.ceil(len(text) / 3.5))
