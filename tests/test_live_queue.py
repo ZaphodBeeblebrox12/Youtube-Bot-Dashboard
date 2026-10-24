@@ -318,3 +318,81 @@ def test_provider_cursor_is_persisted_for_restart(db):
         assert batch.provider is ProviderName.GEMINI
         state = session.get(ProviderRouteState, "live:MODERATION")
         assert state.next_index == 1
+
+
+
+def test_token_budget_does_not_send_single_oversized_message(db):
+    _, factory = db
+    now = datetime(2026, 10, 25, tzinfo=timezone.utc)
+    config = LiveQueueConfig(
+        batch_delay_seconds=2,
+        max_input_tokens=2000,
+        system_prompt_reserve_tokens=1800,
+    )
+    with factory() as session:
+        ingest_live_message(session, msg("m-big", text="x" * 2500), received_at=now)
+        session.commit()
+        batch = prepare_due_batch(
+            session,
+            session_id="session-1",
+            pipeline=LivePipeline.REPLY_FINDER,
+            config=config,
+            now=now + timedelta(seconds=3),
+        )
+        session.commit()
+        assert batch is None
+        task = session.scalar(select(LiveMessageTask).where(
+            LiveMessageTask.message_id == "m-big",
+            LiveMessageTask.pipeline == LivePipeline.REPLY_FINDER.value,
+        ))
+        assert task.state == TaskState.FAILED_FINAL.value
+        assert "exceeds estimated payload budget" in task.last_error
+
+
+def test_provider_cursor_does_not_advance_when_no_message_fits(db):
+    _, factory = db
+    now = datetime(2026, 10, 25, tzinfo=timezone.utc)
+    config = LiveQueueConfig(
+        batch_delay_seconds=2,
+        max_input_tokens=2000,
+        system_prompt_reserve_tokens=1800,
+    )
+    with factory() as session:
+        ingest_live_message(session, msg("m-big", text="x" * 2500), received_at=now)
+        session.commit()
+        batch = prepare_due_batch(
+            session,
+            session_id="session-1",
+            pipeline=LivePipeline.REPLY_FINDER,
+            config=config,
+            now=now + timedelta(seconds=3),
+        )
+        session.commit()
+        assert batch is None
+        assert session.get(ProviderRouteState, "live:REPLY_FINDER") is None
+
+
+def test_shielded_message_is_not_in_reply_ai_payload_but_remains_moderation_payload(db):
+    _, factory = db
+    now = datetime(2026, 10, 25, tzinfo=timezone.utc)
+    config = LiveQueueConfig(batch_delay_seconds=2)
+    with factory() as session:
+        shield_user_for_session(
+            session, session_id="session-1", user_channel_id="channel-evil",
+            reason="Repeated antagonism", source="AI", confidence=0.99,
+        )
+        ingest_live_message(session, msg("m-shielded", "channel-evil"), received_at=now)
+        session.commit()
+
+        reply_batch = prepare_due_batch(
+            session, session_id="session-1", pipeline=LivePipeline.REPLY_FINDER,
+            config=config, now=now + timedelta(seconds=3)
+        )
+        assert reply_batch is None
+
+        moderation_batch = prepare_due_batch(
+            session, session_id="session-1", pipeline=LivePipeline.MODERATION,
+            config=config, now=now + timedelta(seconds=3)
+        )
+        assert moderation_batch is not None
+        assert moderation_batch.message_ids == ("m-shielded",)
