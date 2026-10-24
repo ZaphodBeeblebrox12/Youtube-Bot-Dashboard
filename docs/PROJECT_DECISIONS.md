@@ -515,3 +515,71 @@ Refinement to Past Videos Cleanup: this is not a one-time report. Run repeated s
 - Per video: comments found, first-seen/new comments, previously known comments, replies found, sent to AI, already classified/skipped, candidates, deleted, pending review, failures, last/next sweep and monitoring-window state.
 - Global usage: total AI input/output tokens and estimated cost attributable only to newly classified comments; API quota used by sweeps.
 - Test repeat sweeps with no new comments (zero additional AI submissions), one new top-level comment, a new reply in an old thread, duplicate pages, interrupted pagination, AI failure/retry, edited comment, process restart, a video reaching its 20-day window end, and a manual rescan.
+
+
+## Recommended missing safeguards / proposed backlog (review before implementation, 2026-10-24)
+
+These are design recommendations for review, not new user-approved moderation or deletion policy. Preserve the already settled distinction between Lever 1 (Session Shield: internal Reply Finder filtering only) and Lever 2 (future active enforcement).
+
+### 1. YouTube quota manager and safe sweep cadence
+- Track API quota units by method, not just request counts. The currently published YouTube Data API quota page lists 1 unit for `commentThreads.list` and 50 units for `comments.delete`; standard default allocation for most endpoints is 10,000 units/day, subject to the project's actual quota configuration. Re-check official docs and the channel project's quota in Google Cloud before launch.
+- Example budget implication: 200 successful/attempted delete calls at 50 units each could consume 10,000 units before any read/listing calls. Add a reserved quota budget for scanning and safety margin.
+- Provide configurable max API units/day, a warning threshold, a hard stop before exhausting quota, and a “resume next quota day” state. Deletions must never bypass this stop.
+- Count retries and invalid requests in quota telemetry where the API charges them. Show estimated quota remaining and last API error.
+
+### 2. Edited-comment policy without reprocessing everything
+- Store a normalized text hash/version with each comment. On later sweeps, compare current text/version with the stored version.
+- If an existing comment's text has not changed, reuse its saved classification and do not send it to AI again.
+- If text changes, mark it `EDITED_REASSESSMENT` and queue only the changed version for AI. Preserve prior version, classification and decision for the audit trail.
+- Keep this edited-comment recheck as a separate queue and report it separately from genuinely new comments, so AI usage remains predictable.
+
+### 3. Explicit negative-comment policy settings
+- Separate *target* (creator, content, another commenter, market/third party, uncertain), *sentiment* (negative, neutral, positive, mixed) and *type* (personal abuse, hostile dismissal, respectful criticism/correction, off-topic negative commentary, spam, satire/ambiguous).
+- Let the owner configure which combinations are deletion candidates. Default workflow remains preview/review first.
+- Do not silently treat all negative sentiment about the creator/content as the same kind of abuse; show respectful criticism/corrections separately, because broad deletion could remove feedback the owner might value. The owner can explicitly choose a stricter cleanup policy after seeing examples.
+- Use representative examples to calibrate the policy before enabling automatic deletion.
+
+### 4. OAuth and credential safety
+- Use the minimum YouTube OAuth scopes required for each feature, and clearly show the connected channel identity.
+- Store refresh/access tokens in secret storage or encrypted at rest, never in source control or logs. Support reconnect/revoke, expiry handling and access checks.
+- Separate viewing/scanning permission from delete permission where feasible. Deletion requires an explicitly authorized channel account; never retry a permission error as if it were a transient error.
+- Provide a one-click “pause all scheduled jobs” / disconnect control that safely stops API calls without deleting the database.
+
+### 5. Job orchestration, resumability and idempotency
+- Run sweeps and AI processing as background jobs, not inside a web request. Persist per-video cursors/checkpoints, next-run time, job status, retries and partial results.
+- Use bounded exponential backoff for retryable API/network failures and a dead-letter/review state after repeated failures. Respect API quota and transient error guidance.
+- Ensure idempotency: retrying an AI job or deletion job must not create duplicate classifications, duplicate audit actions or false success counts.
+- Make deletion jobs re-check current comment status and approval immediately before calling the delete API. Store exact API response/error.
+
+### 6. Irreversible deletion safeguards
+- Keep preview-first as the initial mode. Show comment text, target/type, confidence, video title, and why it qualifies, with individual and bulk approval.
+- Display a clear confirmation before bulk deletion, including item count and expected quota use. No auto-delete by default.
+- Since deleted comments generally cannot be restored by this tool, save the minimum lawful/necessary evidence and decision audit before issuing deletion. Clearly differentiate “approved”, “delete requested”, “API confirmed deleted”, “already absent”, and “failed”.
+- Auto-delete, if later enabled, must be a separate owner-controlled setting with high-confidence thresholds, strict target rules and an emergency stop.
+
+### 7. Observability and cost control
+- Dashboard metrics should separate AI token costs from YouTube API quota: new comments discovered, previously known comments skipped, edited comments reassessed, AI input/output tokens by model, answer-brief generations, per-video read calls, delete calls, retries and estimated spend.
+- Add configurable daily/weekly spending and usage alerts for AI. Make the system pause nonessential AI jobs when a configured limit is reached, while preserving database writes and surfacing the pause visibly.
+- Add “last successful sweep”, “last successful AI classification”, next run, and the most recent error for each video/job.
+
+### 8. Separation of concerns and fail-safe behaviour
+- Keep live chat ingestion, moderation classification, Session Shield filtering, Reply Finder answer generation, and historical comment cleanup as separate services/jobs with clear permissions.
+- If AI is unavailable, keep incoming chat and DB ingestion running; queue new comments and messages for retry rather than losing them.
+- If deletion authorization, classification confidence, or quota status is uncertain, do not delete. If active ban enforcement is not explicitly enabled, never call ban/timeout APIs.
+- Keep model responses as untrusted inputs; validate schema, IDs and allowed state transitions server-side.
+
+### 9. Retention, backups and recovery
+- Set a configurable retention policy for full comment text versus IDs, hashes, classifications and audit metadata. Avoid keeping unnecessary user data forever.
+- Back up PostgreSQL and test restoring a backup, not just creating one. Include migrations, database version and recovery instructions in project docs.
+- Use migrations for schema changes and test them against a copy of production-like data before deploy.
+
+### 10. Acceptance-test checklist
+- Re-running an unchanged sweep sends zero previously-classified comments to AI.
+- A newly added reply beneath an old thread is found and classified once.
+- Edited comments enter only the edited-reassessment queue.
+- API quota limit pauses the job before unsafe exhaustion; deletion quota is counted separately from read quota.
+- OAuth expiry/permission errors are visible and do not cause infinite retries.
+- Restarting the worker resumes from checkpoints without duplicates.
+- Preview mode causes zero deletion calls; only approved/high-confidence items are deleted.
+- Session Shield exclusions never produce YouTube moderation API calls.
+- Future Active Moderation stays disabled until explicitly enabled and separately tested.
