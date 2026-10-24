@@ -1,6 +1,6 @@
 # YouTube Bot Dashboard
 
-A private livestream co-pilot that filters chat into a curated answer queue, while keeping moderation decisions, persistent history, and historical comment cleanup separate.
+A private, local-first livestream co-pilot with a curated answer queue and low-noise community memory. It keeps moderation, viewer recognition, and historical comment cleanup separate.
 
 ## Safety levers
 
@@ -12,7 +12,7 @@ A private livestream co-pilot that filters chat into a curated answer queue, whi
 
 The first implementation slice is a deterministic policy gate around AI classifications. It separates target, sentiment, and conduct type. Negative sentiment alone is never enough to propose deletion. Genuine criticism such as "This lesson is terrible and your explanation makes no sense" is kept by default. High-confidence personal abuse or another explicitly mapped violation can become a deletion candidate, but still requires owner approval.
 
-The initial Streamlit panel, durable live queue, worker, optional Gemini/Qwen provider adapters, and an authenticated JSON ingestion endpoint are in place. Direct YouTube OAuth/live chat polling, provider-specific prompt caching, PostgreSQL production migrations, and historical comment deletion calls are not connected yet. No YouTube ban/mute/timeout/delete action is made by the live Session Shield path.
+The Streamlit panel, durable live queue, optional Gemini/Qwen adapters, authenticated JSON ingestion bridge, read-only YouTube OAuth setup, and direct `liveChatMessages.streamList` listener code are present. The direct connector still needs a real OAuth/active-broadcast test; it is not claimed as end-to-end verified. Provider-specific prompt caching, PostgreSQL production migrations, and historical comment deletion calls remain outstanding. Session Shield does not call YouTube ban/mute/timeout/delete APIs.
 
 ## Development
 
@@ -21,12 +21,16 @@ Requires Python 3.11 or newer. For local configuration, copy `.env.example` to `
 ```bash
 python -m venv .venv
 source .venv/bin/activate  # Windows: .venv\Scripts\activate
-python -m pip install -e ".[dev,ai]"
+python -m pip install -e ".[dev,ai,youtube]"
 pytest
 streamlit run app.py
 # in a second terminal, accept normalized chat JSON from a trusted source
 uvicorn youtube_bot_dashboard.ingest_api:app --host 127.0.0.1 --port 8000
-# in a third terminal, start the live queue worker
+# optional: authorize once after configuring a Desktop OAuth client
+python -m youtube_bot_dashboard.youtube_auth
+# optional: receive YouTube live chat over streamList in a separate terminal
+python -m youtube_bot_dashboard.youtube_listener
+# in another terminal, start the live queue worker
 python -m youtube_bot_dashboard.live_worker
 ```
 
@@ -47,9 +51,11 @@ python -m youtube_bot_dashboard.live_worker
 - [x] Background worker and Gemini/Qwen provider adapters with response-schema validation
 - [x] Environment-based provider registry (model IDs/API credentials supplied outside source)
 - [x] Authenticated normalized-JSON ingestion endpoint for a trusted chat source
-- [ ] YouTube OAuth and direct live chat polling to populate the ingestion endpoint
+- [x] Read-only YouTube OAuth setup and direct streamList listener code (live-broadcast verification pending)
 - [ ] Provider-specific prompt caching and usage reconciliation
-- [ ] Fully implemented private Reply Finder card UI and two-sentence answer briefs
+- [x] One-at-a-time private Reply Finder card UI and two-sentence answer briefs
+- [x] Community memory profiles based on stable channel ID, visit history, and optional member badge
+- [x] Meaningful memory suggestions within the Reply Finder pass, owner review, two-saved-memory cap, forget controls, and glanceable returning-viewer cue
 - [ ] Preview/approval-based comment deletion integration
 - [ ] Active Moderation enforcement (future phase only)
 
@@ -70,6 +76,7 @@ The ingest bridge accepts a normalized batch at `POST /api/v1/live/ingest` with 
       "message_id": "youtube-message-id",
       "user_id": "youtube-channel-id",
       "username": "Viewer",
+      "is_member": true,
       "text": "Why can a breakout fail?",
       "published_at": "2026-10-25T12:00:00Z"
     }
@@ -77,4 +84,4 @@ The ingest bridge accepts a normalized batch at `POST /api/v1/live/ingest` with 
 }
 ```
 
-Each message is stored once and queued independently for moderation and Reply Finder. Session Shield messages still enter the moderation pipeline but are removed from the Reply Finder payload before its AI call. Treat all message text as untrusted input. Do not expose `INGEST_API_KEY` to viewers or include it in client-side code.
+Each message is stored once and queued independently for moderation and Reply Finder. The optional `is_member` value must come from the source; the system never guesses membership. Community Memory tracks basic visit history by stable channel ID but stores no ordinary chat text as a memory. Reply Finder can suggest a short follow-up when someone shares an ongoing challenge, goal, or progress; the owner must approve it, with at most two saved memories per viewer. During the stream, the queue shows a brief “returning viewer” cue, not another inbox. Session Shield messages still enter moderation but are removed from the Reply Finder payload before its AI call. Treat all message text as untrusted input. Do not expose `INGEST_API_KEY` to viewers or include it in client-side code.
