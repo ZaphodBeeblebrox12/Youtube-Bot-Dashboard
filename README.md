@@ -16,7 +16,7 @@ The initial Streamlit panel, durable live queue, worker, optional Gemini/Qwen pr
 
 ## Development
 
-Requires Python 3.11 or newer.
+Requires Python 3.11 or newer. For local configuration, copy `.env.example` to `.env`, set a long random `INGEST_API_KEY`, and configure at least one AI provider. The `.env` file is ignored by Git.
 
 ```bash
 python -m venv .venv
@@ -41,10 +41,9 @@ python -m youtube_bot_dashboard.live_worker
 - [x] Configurable live batch settings persisted to the database (2-second delay, 100-message cap, approximate token budget)
 - [x] Round-robin Gemini/Qwen batch routing state, with per-pipeline rotation and fixed-provider options
 - [x] Session Shield filtering before Reply Finder payload creation while moderation tasks continue independently
-- [x] Initial Streamlit settings/queue-status dashboard scaffold (no live source connected yet)
+- [x] Initial Streamlit settings/queue-status dashboard with authenticated normalized-JSON ingest bridge
 - [x] Live moderation and Reply Finder system-prompt templates
 - [ ] PostgreSQL production configuration, migrations, and concurrency hardening
-- [ ] YouTube OAuth and live chat ingestion
 - [x] Background worker and Gemini/Qwen provider adapters with response-schema validation
 - [x] Environment-based provider registry (model IDs/API credentials supplied outside source)
 - [x] Authenticated normalized-JSON ingestion endpoint for a trusted chat source
