@@ -216,6 +216,7 @@ class IncomingLiveMessage:
     text: str
     user_channel_id: str | None = None
     username: str | None = None
+    is_member: bool | None = None
     published_at: datetime | None = None
 
     def __post_init__(self) -> None:
@@ -296,7 +297,7 @@ def register_live_session(
     session_id: str,
     live_chat_id: str | None = None,
     broadcast_id: str | None = None,
-    source: str = "JSON_INGEST",
+    source: str | None = None,
     started_at: datetime | None = None,
 ) -> LiveSessionRecord:
     if not session_id.strip():
@@ -307,7 +308,7 @@ def register_live_session(
             session_id=session_id,
             live_chat_id=live_chat_id,
             broadcast_id=broadcast_id,
-            source=source,
+            source=source or "JSON_INGEST",
             started_at=started_at or utc_now(),
             status="ACTIVE",
         )
@@ -317,7 +318,8 @@ def register_live_session(
             record.live_chat_id = live_chat_id
         if broadcast_id is not None:
             record.broadcast_id = broadcast_id
-        record.source = source
+        if source is not None:
+            record.source = source
         if record.status != "ACTIVE":
             raise ValueError("cannot receive new messages for a closed session")
     session.flush()
@@ -501,6 +503,7 @@ def ingest_live_message(
         user_channel_id=incoming.user_channel_id,
         display_name=incoming.username,
         session_id=incoming.session_id,
+        is_member=incoming.is_member,
         observed_at=now,
     )
 
