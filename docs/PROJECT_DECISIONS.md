@@ -644,7 +644,7 @@ The repository previously contained planning documentation without application c
 - `tests/test_comment_cleanup_policy.py` and `tests/test_storage.py` cover the policy and persistence behaviour.
 - `.github/workflows/tests.yml` runs pytest on pushes to and pull requests targeting `main`.
 
-**Verification status:** test files were authored for this first slice, but a completed local/GitHub test run has not been verified in this environment. A local clone attempt failed because the environment could not resolve github.com, and GitHub status queries returned no reported status checks. Treat test execution as pending until CI logs or a local run confirm it. No live YouTube connection, Gemini/Qwen API adapters, or comment-deletion/ban API calls exist yet. The storage helper's `create_schema` is for development/tests; PostgreSQL migrations, production concurrency hardening and deployment configuration remain future implementation tasks.
+**Verification status:** test files were authored for this first slice, but a completed local/GitHub test run has not been verified in this environment. A local clone attempt failed because the environment could not resolve github.com, and GitHub status queries returned no reported status checks. Treat test execution as pending until CI logs or a local run confirm it. No live YouTube connection or comment-deletion/ban API calls exist yet. Gemini/Qwen adapters and a queue worker are now present in code but have not been exercised against live provider credentials in this environment. The storage helper's `create_schema` is for development/tests; PostgreSQL migrations, production concurrency hardening and deployment configuration remain future implementation tasks.
 
 **Policy examples:** “This lesson is terrible and your explanation makes no sense” is explicitly KEEP when classified as content criticism; it must not be deleted solely for negative sentiment. “You are an idiot and should never teach anyone” can be a deletion candidate only if a validated assessment classifies it as personal abuse with sufficient confidence and the owner approves the deletion. The policy gate never calls the deletion API.
 
@@ -657,14 +657,17 @@ A live-chat queue slice and an initial Streamlit control panel have been added o
 - **Batch delay:** 2 seconds by default. It is stored in the database and adjustable from Settings; supported range is 0.25–30 seconds.
 - **Maximum batch size:** 100 messages by default, but the queue flushes on the 2-second age of the oldest queued message or when the cap is reached—whichever occurs first. It does not wait for 100 messages if chat is slower.
 - **Input-token budget:** default estimated total 12,000 tokens, with 3,000 tokens reserved for system instructions. The current estimate is only a heuristic; provider-specific token counting is still required before production.
-- **Provider choice:** default is round-robin between Gemini and Qwen, independently per pipeline, for comparison. The settings model also supports pinning a pipeline to Gemini only or Qwen only. API adapters are not connected yet.
+- **Provider choice:** default is round-robin between Gemini and Qwen, independently per pipeline, for comparison. The settings model also supports pinning a pipeline to Gemini only or Qwen only. Concrete Gemini and Qwen adapter code and a provider registry now exist; live credentials and actual provider smoke tests remain outstanding.
 - **Separate pipelines:** each incoming message creates an independently tracked moderation task and Reply Finder task. The moderator pipeline continues for a shielded user; Session Shield only filters that user's messages out of the Reply Finder payload.
 - **Per-message state:** pending, batched, sent, completed, retryable/final failure, or excluded by Session Shield. Every batch stores its provider, payload, response, token usage, timestamps and status.
-- **Partial provider response:** missing message IDs in moderation results are retryable; Reply Finder results intentionally include only selected messages, so non-selected inputs are recorded as completed/not selected. Unknown IDs are ignored by the current persistence helper; response schema validation still needs to be implemented before provider integration.
+- **Partial provider response:** missing message IDs in moderation results are retryable; Reply Finder results intentionally include only selected messages, so non-selected inputs are recorded as completed/not selected. The worker validates returned IDs and classification fields against the submitted batch before persistence; tests and live provider response checks still need verification.
 - **Provider rotation and message statuses are database-backed** to preserve work tracking across application restarts.
 
 ### Code added
-- `src/youtube_bot_dashboard/live_queue.py`: live sessions, Session Shield records, message tasks, batches, database settings, round-robin provider cursor, batch delay check, approximate token budgeting, response completion/retry helpers.
+- `src/youtube_bot_dashboard/live_queue.py`: live sessions, Session Shield records, message tasks, batches, database settings, round-robin provider cursor, batch delay check, approximate token budgeting, cached-token usage, response completion/retry helpers.
+- `src/youtube_bot_dashboard/providers/gemini.py` and `qwen.py`: optional API adapters configured by environment variables; Qwen base URL/model are not hard-coded.
+- `src/youtube_bot_dashboard/live_worker.py`: background polling loop, due-batch preparation, provider invocation, JSON/ID/schema checks, retry handling, and automatic Session Shield activation only for a validated qualifying category with `suggest_shield=true` and confidence at or above the stored threshold.
+- `.env.example`: names of supported runtime environment variables, no secrets.
 - `src/youtube_bot_dashboard/prompts/live_moderation.py`: non-punitive live moderation classifier prompt.
 - `src/youtube_bot_dashboard/prompts/reply_finder.py`: curated reply selection, stance labels, priority, and exactly two spoken sentences for moderate/difficult questions.
 - `app.py`: initial Streamlit scaffold for overview/settings/queue status, with light theme. It clearly indicates that YouTube and AI connections are not yet active.
@@ -673,11 +676,31 @@ A live-chat queue slice and an initial Streamlit control panel have been added o
 
 ### Known limitations / next implementation
 - No YouTube OAuth or actual live chat ingestion is connected.
-- No concrete Gemini/Qwen API request adapters or provider caching are connected; provider routing currently records which provider should receive each batch.
-- The worker that polls due batches, commits before network calls, invokes the provider adapter, validates returned JSON against the exact input IDs and persists the answer is not yet implemented.
-- The 2-second batch window is represented in backend scheduling primitives; a continuously running background worker has not yet been wired.
+- No YouTube OAuth or actual live chat ingestion is connected, so the worker waits until another source persists active-session messages.
+- Provider prompt caching is not implemented. Token usage (including cached-input usage if reported by the adapter) is recorded for later cost comparison.
+- The worker currently processes provider calls sequentially. Concurrency/rate-limit tuning and PostgreSQL `FOR UPDATE SKIP LOCKED` or equivalent leases are future hardening tasks.
+- The 2-second window is enforced by a polling worker; verify real-world latency and provider rate limits before depending on it live.
 - Production concurrent claims need PostgreSQL `FOR UPDATE SKIP LOCKED` or an equivalent lease mechanism and migration-managed schema.
 - Token caps use a character-based estimate and must be replaced/validated with each provider's token counter before live use.
 - Tests have been written but are not claimed as passing until an actual test run is verified.
 
 Active Moderation remains disabled. No YouTube ban, mute, timeout, delete or reply-posting action is enabled by this checkpoint.
+
+
+## Live worker and provider integration checkpoint (2026-10-25)
+
+Implementation has progressed from queue scaffolding to a provider-call worker:
+
+- `providers/base.py` defines the common response contract including model ID, input/output tokens and cached-input tokens if a provider reports them.
+- `providers/registry.py` enables only providers with required environment configuration. It does not store API keys in the database.
+- `providers/gemini.py` uses Google's Gen AI SDK with JSON response mode. Configure `GEMINI_API_KEY` and `GEMINI_MODEL`.
+- `providers/qwen.py` uses an OpenAI-compatible endpoint and JSON response mode. Configure `QWEN_API_KEY`, `QWEN_BASE_URL`, and `QWEN_MODEL`; endpoint/model are intentionally not hard-coded because service/region choices are not yet settled.
+- `live_worker.py` polls active sessions for due batches, persists a batch before network I/O, marks it sent, invokes the selected adapter, checks JSON structure and exact message IDs, stores per-message results/tokens, and marks omissions/errors for bounded retry.
+- Round-robin routing is independent per pipeline, so moderation batches can be compared between Gemini and Qwen separately from Reply Finder batches. Current default is Gemini then Qwen if both are configured and enabled.
+- **Session Shield activation:** a moderation result only triggers internal Reply Finder filtering if the model sets `suggest_shield=true`, the category is a violation rather than `NO_VIOLATION`/`UNCERTAIN`, the user ID is present, and confidence reaches the configurable threshold (default 0.90). The shield function removes the user from any prepared-but-unsent Reply Finder payload; moderation continues. No YouTube mute/ban/timeout/delete API is called.
+- Settings UI now exposes batch delay (default 2 seconds), maximum messages (default 100), approximate input-token budget/reserved prompt tokens, provider strategy and Session Shield confidence threshold.
+- `.env.example` lists variable names only.
+
+**Execution caveat:** the repository environment in this session cannot clone GitHub due DNS/network restrictions, and GitHub status queries have not returned workflow checks. Tests have been authored for provider response validation and the automatic Session Shield flow, but their passing status remains unverified here. Do not treat them as a passing CI run until logs confirm it. Provider adapters have not yet been verified with real API keys, and the worker does not ingest YouTube messages on its own.
+
+Active Moderation remains off. The provider worker only classifies and writes internal results; it has no enforcement adapter.
