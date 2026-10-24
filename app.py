@@ -82,6 +82,16 @@ def db_session():
         session.close()
 
 
+def super_chat_amount_label(message) -> str:
+    """Prefer YouTube's display string; otherwise format the source amount."""
+    if message.super_chat_amount_display:
+        return message.super_chat_amount_display
+    if message.super_chat_amount_micros is not None:
+        amount = f"{message.super_chat_amount_micros / 1_000_000:,.2f}"
+        return f"{amount} {message.super_chat_currency or ''}".strip()
+    return "Amount unavailable"
+
+
 def read_counts(session):
     total_messages = session.scalar(select(func.count()).select_from(LiveMessageRecord)) or 0
     total_tasks = session.scalar(select(func.count()).select_from(LiveMessageTask)) or 0
@@ -441,9 +451,9 @@ elif page == "Settings":
     st.caption("Run the worker as a separate background process after setting DATABASE_URL and the selected provider's credentials/model environment variables. For direct YouTube intake, configure the OAuth Desktop client, run python -m youtube_bot_dashboard.youtube_auth, then python -m youtube_bot_dashboard.youtube_listener. Real-broadcast veelif page == "Live Chat":
     st.subheader("AI-whitelisted live chat")
     st.caption(
-        "By default, a message appears only after the AI safety check clears it with high confidence "
-        "and Reply Finder selects it as useful or constructive. This is a private display filter; "
-        "it does not delete messages or restrict anyone on YouTube."
+        "Ordinary messages need high-confidence AI safety approval and a useful Reply Finder selection. "
+        "Super Chats jump to the top after the same safety check clears them, even when there is no comment. "
+        "This is a private display filter; it does not delete messages or restrict anyone on YouTube."
     )
     show_unfiltered = st.checkbox(
         "Show unfiltered messages (includes pending, uncertain, flagged, and low-value chat)",
@@ -472,7 +482,10 @@ elif page == "Settings":
                 query = query.where(LiveMessageRecord.session_id == latest_session_id)
 
         messages = list(session.scalars(
-            query.order_by(LiveMessageRecord.first_seen_at.desc()).limit(100)
+            query.order_by(
+                LiveMessageRecord.is_super_chat.desc(),
+                LiveMessageRecord.first_seen_at.desc(),
+            ).limit(100)
         ))
         tasks_by_key = {}
         if messages:
@@ -481,6 +494,18 @@ elif page == "Settings":
                 select(LiveMessageTask).where(LiveMessageTask.message_id.in_(message_ids))
             ))
             tasks_by_key = {(task.message_id, task.pipeline): task for task in tasks}
+
+        active_shield_keys = {
+            (row[0], row[1])
+            for row in session.execute(
+                select(SessionShieldRecord.session_id, SessionShieldRecord.user_channel_id)
+                .join(LiveSessionRecord, LiveSessionRecord.session_id == SessionShieldRecord.session_id)
+                .where(
+                    SessionShieldRecord.active.is_(True),
+                    LiveSessionRecord.status == "ACTIVE",
+                )
+            ).all()
+        }
 
         feed_items = []
         for message in messages:
@@ -498,17 +523,28 @@ elif page == "Settings":
 
             moderation_result = task_result(moderation_task)
             reply_result = task_result(reply_task)
+            is_shielded = bool(
+                message.user_channel_id
+                and (message.session_id, message.user_channel_id) in active_shield_keys
+            )
             approved, reason = is_ai_whitelisted_for_display(
                 moderation_state=moderation_task.state if moderation_task else None,
                 moderation_result=moderation_result,
                 reply_finder_state=reply_task.state if reply_task else None,
                 reply_finder_result=reply_result,
+                is_super_chat=message.is_super_chat,
             )
+            if is_shielded:
+                approved = False
+                reason = "Viewer is currently excluded by Session Shield."
             feed_items.append({
                 "message_id": message.message_id,
                 "username": message.username or "Unknown viewer",
                 "text": message.text,
                 "published_at": message.published_at or message.first_seen_at,
+                "is_super_chat": bool(message.is_super_chat),
+                "super_chat_amount": super_chat_amount_label(message) if message.is_super_chat else None,
+                "is_shielded": is_shielded,
                 "approved": approved,
                 "reason": reason,
                 "moderation_state": moderation_task.state if moderation_task else "MISSING",
@@ -545,6 +581,8 @@ elif page == "Settings":
             message_time = item["published_at"].strftime("%H:%M:%S") if item["published_at"] else "Time unknown"
             with st.container(border=True):
                 st.markdown(f"**{item['username']}** · {message_time}")
+                if item["is_super_chat"]:
+                    st.markdown(f"**💛 SUPER CHAT · {item['super_chat_amount']} · PRIORITY**")
                 st.write(item["text"])
                 if show_unfiltered:
                     if item["approved"]:
@@ -576,8 +614,8 @@ elif page == "Settings":
             st.caption("No live chat messages have been ingested yet.")
 
     st.divider()
-    st.subheader("Session Shield · internal Reply Finder filter")
-    st.caption("Shielded users remain able to chat on YouTube. Their messages are skipped only by the Reply Finder pipeline until this session ends.")
+    st.subheader("Session Shield · all-AI input filter")
+    st.caption("A shielded viewer can still post on YouTube, but their subsequent messages are excluded from both AI pipelines for the rest of this session. This internal filter does not ban or mute anyone on YouTube.")
     with db_session() as session:
         shields = session.execute(
             select(SessionShieldRecord, LiveSessionRecord)
@@ -647,7 +685,7 @@ elif page == "Reply Queue":
                 LiveMessageTask.pipeline == LivePipeline.REPLY_FINDER.value,
                 LiveMessageTask.state == TaskState.COMPLETED.value,
             )
-            .order_by(LiveMessageTask.completed_at.asc())
+            .order_by(LiveMessageRecord.is_super_chat.desc(), LiveMessageTask.completed_at.asc())
             .limit(250)
         ).all()
         shown = []
@@ -664,6 +702,9 @@ elif page == "Reply Queue":
                     "user_id": message.user_channel_id,
                     "message": message.text,
                     "username": message.username or "Unknown viewer",
+                    "is_super_chat": bool(message.is_super_chat),
+                    "super_chat_amount": super_chat_amount_label(message) if message.is_super_chat else None,
+                    "completed_at": task.completed_at,
                     "priority": result.get("priority", "NORMAL"),
                     "stance": result.get("trading_stance", "NOT_APPLICABLE"),
                     "ease": result.get("ease_to_answer", "MODERATE"),
@@ -677,10 +718,17 @@ elif page == "Reply Queue":
                 })
 
     if shown:
-        st.caption(f"{len(shown)} selected message(s) waiting for your attention · showing the oldest unhandled item first")
+        shown.sort(key=lambda item: (
+            not item["is_super_chat"],
+            item["completed_at"] is None,
+            str(item["completed_at"] or ""),
+        ))
+        st.caption(f"{len(shown)} selected message(s) waiting for your attention · Super Chats are prioritized first")
         item = shown[0]
         with st.container(border=True):
             st.subheader(item["username"])
+            if item["is_super_chat"]:
+                st.markdown(f"**💛 SUPER CHAT · {item['super_chat_amount']} · PRIORITY**")
             # A returning-viewer cue is deliberately brief: glance at it, speak
             # naturally if relevant, and keep the live conversation moving.
             with db_session() as session:
@@ -760,7 +808,7 @@ elif page == "Reply Queue":
                         session.commit()
                 st.rerun()
     else:
-        st.caption("No selected messages are waiting. The dashboard does not display the unfiltered chat feed.")
+        st.caption("No selected messages are waiting. Safe Super Chats and AI-selected ordinary messages appear in Live Chat; unfiltered chat stays hidden unless explicitly enabled.")
 
 elif page == "Community Memory":
     st.subheader("Community Memory")

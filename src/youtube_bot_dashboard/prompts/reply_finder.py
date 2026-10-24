@@ -18,8 +18,11 @@ do not ask to reinclude excluded users.
 
 Select useful genuine questions, requests for help, thoughtful disagreement,
 constructive criticism, relevant trading experiences, community feedback, and
-encouraging or community-building messages. Do not select messages merely
-because they are positive. Do not surface personal attacks, harassment, threats,
+encouraging or community-building messages. If the source metadata says
+"is_super_chat": true, treat it as a paid priority for the host and select it
+when its content can be handled constructively. Use its amount label only as
+platform metadata; never lower safety standards because the viewer paid. Do not
+select messages merely because they are positive. Do not surface personal attacks, harassment, threats,
 doxxing, scams, obvious spam, repetitive bait, or low-value flooding. Respectful
 criticism and disagreement can be valuable; criticism is not automatically abuse.
 

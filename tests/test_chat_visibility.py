@@ -10,12 +10,13 @@ USEFUL = {"selected": True, "confidence": 0.92}
 
 
 def decide(*, moderation_state="COMPLETED", moderation_result=SAFE,
-           reply_state="COMPLETED", reply_result=USEFUL):
+           reply_state="COMPLETED", reply_result=USEFUL, is_super_chat=False):
     return is_ai_whitelisted_for_display(
         moderation_state=moderation_state,
         moderation_result=moderation_result,
         reply_finder_state=reply_state,
         reply_finder_result=reply_result,
+        is_super_chat=is_super_chat,
     )
 
 
@@ -59,3 +60,24 @@ def test_malformed_or_missing_safety_confidence_fails_closed():
     for confidence in (None, True, float("nan"), float("inf"), -0.1, 1.1):
         allowed, _ = decide(moderation_result={"category": "NO_VIOLATION", "confidence": confidence})
         assert allowed is False
+
+def test_safe_super_chat_is_visible_even_if_reply_finder_does_not_select_it():
+    allowed, reason = decide(
+        is_super_chat=True,
+        reply_state="COMPLETED",
+        reply_result={"selected": False},
+    )
+    assert allowed is True
+    assert "Super Chat prioritized" in reason
+
+
+def test_super_chat_still_requires_completed_high_confidence_safety_clearance():
+    assert decide(is_super_chat=True, moderation_state="PENDING")[0] is False
+    assert decide(
+        is_super_chat=True,
+        moderation_result={"category": "HARASSMENT", "confidence": 0.99},
+    )[0] is False
+    assert decide(
+        is_super_chat=True,
+        moderation_result={"category": "NO_VIOLATION", "confidence": 0.89},
+    )[0] is False
