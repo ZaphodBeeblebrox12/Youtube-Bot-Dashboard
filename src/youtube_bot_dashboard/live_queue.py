@@ -152,6 +152,7 @@ class LiveAIRequestBatch(Base):
     response_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     input_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
     output_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    cached_input_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
     sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -722,6 +723,7 @@ def complete_live_batch(
     raw_response: dict,
     input_tokens: int | None = None,
     output_tokens: int | None = None,
+    cached_input_tokens: int | None = None,
     completed_at: datetime | None = None,
 ) -> tuple[int, int]:
     """Persist per-message results; missing results become retryable, not lost."""
@@ -734,6 +736,7 @@ def complete_live_batch(
     batch.response_json = json.dumps(raw_response, ensure_ascii=False)
     batch.input_tokens = input_tokens
     batch.output_tokens = output_tokens
+    batch.cached_input_tokens = cached_input_tokens
     batch.completed_at = now
 
     tasks = list(session.scalars(select(LiveMessageTask).where(
