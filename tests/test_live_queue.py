@@ -228,7 +228,36 @@ def test_provider_strategy_can_be_pinned_to_one_provider(db):
         assert batch.provider is ProviderName.QWEN
 
 
-def test_partial_ai_response_marks_missing_ids_retryable_and_ignores_extra_ids(db):
+def test_moderation_response_missing_message_ids_are_retryable_and_extra_ids_ignored(db):
+    _, factory = db
+    now = datetime(2026, 10, 25, tzinfo=timezone.utc)
+    config = LiveQueueConfig(batch_delay_seconds=2, max_messages_per_batch=10)
+    with factory() as session:
+        ingest_live_message(session, msg("m-1"), received_at=now)
+        ingest_live_message(session, msg("m-2"), received_at=now)
+        session.commit()
+        batch = prepare_due_batch(
+            session, session_id="session-1", pipeline=LivePipeline.MODERATION,
+            config=config, now=now + timedelta(seconds=3)
+        )
+        session.commit()
+        mark_live_batch_sent(session, batch.batch_id, model_id="gemini-model")
+        completed, missing = complete_live_batch(
+            session, batch.batch_id,
+            result_by_message_id={"m-1": {"category": "NO_VIOLATION"}, "not-in-batch": {"category": "SPAM"}},
+            raw_response={"results": [{"message_id": "m-1"}]},
+        )
+        session.commit()
+        assert (completed, missing) == (1, 1)
+        tasks = {t.message_id: t for t in session.scalars(select(LiveMessageTask).where(
+            LiveMessageTask.pipeline == LivePipeline.MODERATION.value
+        ))}
+        assert tasks["m-1"].state == TaskState.COMPLETED.value
+        assert tasks["m-2"].state == TaskState.FAILED_RETRYABLE.value
+        assert tasks["m-2"].batch_id is None
+
+
+def test_reply_finder_non_selected_messages_are_completed_not_retried(db):
     _, factory = db
     now = datetime(2026, 10, 25, tzinfo=timezone.utc)
     config = LiveQueueConfig(batch_delay_seconds=2, max_messages_per_batch=10)
@@ -244,17 +273,17 @@ def test_partial_ai_response_marks_missing_ids_retryable_and_ignores_extra_ids(d
         mark_live_batch_sent(session, batch.batch_id, model_id="gemini-model")
         completed, missing = complete_live_batch(
             session, batch.batch_id,
-            result_by_message_id={"m-1": {"priority": "HIGH"}, "not-in-batch": {"priority": "LOW"}},
+            result_by_message_id={"m-1": {"priority": "HIGH", "selected": True}},
             raw_response={"selected_messages": [{"message_id": "m-1"}]},
         )
         session.commit()
-        assert (completed, missing) == (1, 1)
+        assert (completed, missing) == (2, 0)
         tasks = {t.message_id: t for t in session.scalars(select(LiveMessageTask).where(
             LiveMessageTask.pipeline == LivePipeline.REPLY_FINDER.value
         ))}
         assert tasks["m-1"].state == TaskState.COMPLETED.value
-        assert tasks["m-2"].state == TaskState.FAILED_RETRYABLE.value
-        assert tasks["m-2"].batch_id is None
+        assert tasks["m-2"].state == TaskState.COMPLETED.value
+        assert json.loads(tasks["m-2"].result_json)["selected"] is False
 
 
 def test_provider_failure_retries_then_marks_final_after_limit(db):
