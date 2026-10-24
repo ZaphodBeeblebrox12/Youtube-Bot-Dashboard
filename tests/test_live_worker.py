@@ -209,3 +209,170 @@ def test_worker_keeps_batch_pending_if_provider_is_not_available():
             assert task.batch_id is None
     finally:
         engine.dispose()
+
+
+
+class FakeDualPurposeProvider:
+    provider_name = "GEMINI"
+    model_id = "gemini-test-model"
+
+    def __init__(self):
+        self.reply_payloads = []
+
+    def generate_json(self, *, system_prompt, payload):
+        if "You are the Reply Finder" in system_prompt:
+            self.reply_payloads.append(payload)
+            selected = []
+            for message in payload["messages"]:
+                selected.append({
+                    "message_id": message["message_id"],
+                    "question_type": "COMMUNITY",
+                    "ease_to_answer": "EASY",
+                    "trading_stance": "NOT_APPLICABLE",
+                    "priority": "NORMAL",
+                    "selection_reason": "A relevant, constructive message.",
+                    "suggested_answer_angle": "Answer briefly.",
+                    "suggested_live_response": None,
+                    "needs_research": False,
+                    "confidence": 0.94,
+                    "cluster_message_ids": [message["message_id"]],
+                })
+            return ProviderResponse(
+                text=json.dumps({"selected_messages": selected}),
+                model_id=self.model_id,
+                input_tokens=180,
+                output_tokens=50,
+            )
+
+        results = []
+        for message in payload["messages"]:
+            is_antagonist = message.get("user_id") == "channel-evil"
+            results.append({
+                "message_id": message["message_id"],
+                "category": "PERSONAL_ATTACK" if is_antagonist else "NO_VIOLATION",
+                "severity_score": 92 if is_antagonist else 0,
+                "confidence": 0.99 if is_antagonist else 0.98,
+                "evidence_message_ids": [message["message_id"]],
+                "explanation": "Direct personal abuse." if is_antagonist else "Ordinary chat.",
+                "suggest_shield": is_antagonist,
+            })
+        return ProviderResponse(
+            text=json.dumps({"results": results}),
+            model_id=self.model_id,
+            input_tokens=250,
+            output_tokens=60,
+        )
+
+
+def test_moderation_shields_user_before_prepared_reply_batch_is_sent():
+    engine, factory = create_engine_and_sessions("sqlite://")
+    create_schema(engine)
+    provider = FakeDualPurposeProvider()
+    config = LiveQueueConfig(
+        batch_delay_seconds=2,
+        provider_strategy=ProviderStrategy.GEMINI_ONLY,
+        enabled_providers=(ProviderName.GEMINI,),
+        session_shield_confidence_threshold=0.90,
+    )
+    now = datetime(2026, 10, 25, tzinfo=timezone.utc)
+    try:
+        with factory() as session:
+            register_live_session(session, session_id="session-1", live_chat_id="chat-1")
+            ingest_live_message(
+                session,
+                IncomingLiveMessage(
+                    message_id="m-evil", session_id="session-1",
+                    user_channel_id="channel-evil", username="Bad Actor",
+                    text="You are an idiot.",
+                ),
+                received_at=now,
+            )
+            ingest_live_message(
+                session,
+                IncomingLiveMessage(
+                    message_id="m-good", session_id="session-1",
+                    user_channel_id="channel-good", username="Good Viewer",
+                    text="Can you explain support and resistance?",
+                ),
+                received_at=now,
+            )
+            mod_batch = prepare_due_batch(
+                session, session_id="session-1", pipeline=LivePipeline.MODERATION,
+                config=config, now=now + timedelta(seconds=3)
+            )
+            reply_batch = prepare_due_batch(
+                session, session_id="session-1", pipeline=LivePipeline.REPLY_FINDER,
+                config=config, now=now + timedelta(seconds=3)
+            )
+            session.commit()
+
+        registry = ProviderRegistry({ProviderName.GEMINI: provider})
+        mod_outcome = process_prepared_batch(factory, mod_batch.batch_id, registry, config)
+        assert mod_outcome["status"] == "COMPLETED"
+        assert mod_outcome["session_shield_users_added"] == ["channel-evil"]
+
+        reply_outcome = process_prepared_batch(factory, reply_batch.batch_id, registry, config)
+        assert reply_outcome["status"] == "COMPLETED"
+        assert len(provider.reply_payloads) == 1
+        sent_ids = [m["message_id"] for m in provider.reply_payloads[0]["messages"]]
+        assert sent_ids == ["m-good"]
+
+        with factory() as session:
+            from sqlalchemy import select
+            from youtube_bot_dashboard.live_queue import SessionShieldRecord, LiveMessageTask
+            shield = session.scalar(select(SessionShieldRecord).where(
+                SessionShieldRecord.session_id == "session-1",
+                SessionShieldRecord.user_channel_id == "channel-evil",
+            ))
+            assert shield is not None and shield.active
+            evil_reply_task = session.scalar(select(LiveMessageTask).where(
+                LiveMessageTask.message_id == "m-evil",
+                LiveMessageTask.pipeline == LivePipeline.REPLY_FINDER.value,
+            ))
+            evil_moderation_task = session.scalar(select(LiveMessageTask).where(
+                LiveMessageTask.message_id == "m-evil",
+                LiveMessageTask.pipeline == LivePipeline.MODERATION.value,
+            ))
+            assert evil_reply_task.state == "EXCLUDED_SHIELDED"
+            assert evil_moderation_task.state == "COMPLETED"
+    finally:
+        engine.dispose()
+
+
+def test_low_confidence_shield_suggestion_does_not_exclude_user():
+    from youtube_bot_dashboard.live_worker import apply_session_shield_suggestions
+    from youtube_bot_dashboard.live_queue import SessionShieldRecord
+    from sqlalchemy import select
+
+    engine, factory = create_engine_and_sessions("sqlite://")
+    create_schema(engine)
+    try:
+        with factory() as session:
+            register_live_session(session, session_id="session-1")
+            ingest_live_message(
+                session,
+                IncomingLiveMessage(
+                    message_id="m-1", session_id="session-1",
+                    user_channel_id="channel-1", text="A somewhat rude message",
+                ),
+            )
+            session.commit()
+            shielded = apply_session_shield_suggestions(
+                session,
+                session_id="session-1",
+                payload={"messages": [{"message_id": "m-1", "user_id": "channel-1", "username": "Viewer"}]},
+                results_by_message_id={
+                    "m-1": {
+                        "suggest_shield": True,
+                        "category": "PERSONAL_ATTACK",
+                        "confidence": 0.75,
+                        "explanation": "Ambiguous wording.",
+                    }
+                },
+                confidence_threshold=0.90,
+            )
+            session.commit()
+            assert shielded == []
+            assert session.scalar(select(SessionShieldRecord.id)) is None
+    finally:
+        engine.dispose()
