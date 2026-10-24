@@ -163,3 +163,30 @@ def test_forget_controls_remove_memory_and_entire_profile():
             assert session.get(CommunityViewerProfile, "channel-1") is None
     finally:
         engine.dispose()
+
+
+def test_membership_is_only_saved_when_source_explicitly_provides_it():
+    engine, factory = setup_db()
+    try:
+        with factory() as session:
+            record_viewer_activity(
+                session, user_channel_id="channel-member", display_name="Member",
+                session_id="s1", is_member=True,
+            )
+            profile = session.get(CommunityViewerProfile, "channel-member")
+            assert profile.is_member is True
+
+            record_viewer_activity(
+                session, user_channel_id="channel-member", display_name="Member",
+                session_id="s1", is_member=None,
+            )
+            assert profile.is_member is True
+
+            record_viewer_activity(
+                session, user_channel_id="channel-member", display_name="Member",
+                session_id="s1", is_member=False,
+            )
+            assert profile.is_member is False
+            session.commit()
+    finally:
+        engine.dispose()
