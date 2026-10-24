@@ -406,13 +406,16 @@ elif page == "Reply Queue":
                     candidate for candidate in saved_memories
                     if candidate.last_used_session_id != item["session_id"]
                 ), None)
-            if profile and profile.distinct_sessions_seen >= 2:
+            if profile and (profile.distinct_sessions_seen >= 2 or profile.is_member is True):
                 member_label = "MEMBER · " if profile.is_member is True else ""
-                st.caption(
-                    f"{member_label}RETURNING VIEWER · Seen in {profile.distinct_sessions_seen} streams · "
-                    f"First seen {profile.first_seen_at.strftime('%d %b %Y')}"
-                )
-                if memory:
+                if profile.distinct_sessions_seen >= 2:
+                    st.caption(
+                        f"{member_label}RETURNING VIEWER · Seen in {profile.distinct_sessions_seen} streams · "
+                        f"First seen {profile.first_seen_at.strftime('%d %b %Y')}"
+                    )
+                elif profile.is_member is True:
+                    st.caption(f"MEMBER · First seen {profile.first_seen_at.strftime('%d %b %Y')}")
+                if profile.distinct_sessions_seen >= 2 and memory:
                     st.markdown("**Remember:** " + memory.summary)
                     st.caption("Possible follow-up: " + memory.suggested_follow_up)
                     if st.button("Used this follow-up", key=f"memory-used-{memory.id}-{item['task_id']}"):
@@ -535,7 +538,7 @@ elif page == "Community Memory":
         profiles_by_id = {profile.user_channel_id: profile for profile in profiles}
         st.dataframe([
             {
-                "Member": bool(profiles_by_id.get(memory.user_channel_id).is_member) if profiles_by_id.get(memory.user_channel_id) else False,
+                "Membership": ("Member" if profiles_by_id.get(memory.user_channel_id).is_member is True else "Non-member" if profiles_by_id.get(memory.user_channel_id).is_member is False else "Unknown") if profiles_by_id.get(memory.user_channel_id) else "Unknown",
                 "Viewer": (profiles_by_id.get(memory.user_channel_id).display_name
                            if profiles_by_id.get(memory.user_channel_id)
                            and profiles_by_id.get(memory.user_channel_id).display_name
