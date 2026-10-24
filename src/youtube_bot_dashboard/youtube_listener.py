@@ -30,7 +30,7 @@ from youtube_bot_dashboard.storage import create_engine_and_sessions, create_sch
 logger = logging.getLogger("youtube_bot_dashboard.youtube_listener")
 _PROTO_TEMP = None
 _PROTO_MODULES = None
-YOUTUBE_READ_SCOPE = "https://www.googleapis.com/auth/youtube.readonly"
+YOUTUBE_API_SCOPE = "https://www.googleapis.com/auth/youtube.force-ssl"
 
 
 def load_stream_list_stub():
@@ -81,7 +81,15 @@ def load_youtube_credentials():
     except ImportError as exc:
         raise RuntimeError('Install the YouTube extras with: pip install -e ".[youtube]"') from exc
 
-    credentials = Credentials.from_authorized_user_file(str(token_file), scopes=[YOUTUBE_READ_SCOPE])
+    # Do not silently pretend an older read-only token can create/close polls.
+    # The scope list in the token file reflects what the owner consented to.
+    credentials = Credentials.from_authorized_user_file(str(token_file))
+    granted_scopes = set(credentials.scopes or [])
+    if YOUTUBE_API_SCOPE not in granted_scopes:
+        raise RuntimeError(
+            "The saved YouTube token lacks the live-chat write scope needed for polls. "
+            "Re-run 'python -m youtube_bot_dashboard.youtube_auth' and approve the updated access."
+        )
     if credentials.expired and credentials.refresh_token:
         credentials.refresh(Request())
         token_file.write_text(credentials.to_json(), encoding="utf-8")
@@ -319,7 +327,7 @@ def main() -> None:
     try:
         credentials = load_youtube_credentials()
         youtube = build_youtube_service(credentials)
-        logger.info("YouTube live chat listener started (read-only; no moderation actions).")
+        logger.info("YouTube live chat listener started; poll creation/closure is only triggered explicitly from the dashboard.")
         while True:
             credentials = load_youtube_credentials()
             youtube = build_youtube_service(credentials)
