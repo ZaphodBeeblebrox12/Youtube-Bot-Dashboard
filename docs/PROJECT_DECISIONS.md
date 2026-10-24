@@ -155,3 +155,55 @@ Run moderation and reply finding as two logically separate classifiers/prompts s
 
 ### Validation
 Test both systems independently with good questions, respectful criticism, helpful disagreement, encouragement, spam, harassment, bait, mixed abusive/question messages, duplicate questions, prompt injection and ambiguous context. Measure moderation false positives separately from reply-finder precision/recall. Start with dry-run logging and a configurable visibility threshold before relying on the reply queue.
+
+
+## Dashboard as private live-stream producer screen (decision: 2026-10-24)
+
+The owner does **not** want to reply inside the dashboard or have the bot publish replies. The dashboard is a private, curated screen for the streamer/host to read during the live stream. The owner reads a selected viewer message on the dashboard and answers it verbally on stream, so the public sees and hears the response, while the owner avoids reading the unfiltered chat feed.
+
+### Required UX
+- The default view shows only messages selected by the Reply Finder, not the raw/unfiltered chat.
+- Each card should display the original viewer message, username/handle and timestamp when supplied, plus a concise reason the AI selected it.
+- The owner can move to the next item, mark it answered, skip/dismiss it, or save it for later.
+- Do not post messages or suggested answers to YouTube/chat automatically. Suggested answer angles are private prompts for the streamer, not published replies.
+- Avoid UI that forces the owner to scroll past a raw wall of chat. Keep any raw-log/audit view separate and intentional, not the default live-stream screen.
+- Make the queue readable at a glance while the owner is presenting; use clear typography and small, consistent classification labels.
+
+### Reply-Finder ranking and vetting
+
+The Reply Finder should assess candidate messages independently along these dimensions:
+
+1. **Reply-worthiness:** Is there a useful, genuine interaction here (question, thoughtful discussion, constructive criticism, relevant experience, community feedback, or support request)?
+2. **Ease of answering live:** `EASY`, `MODERATE`, or `DIFFICULT`. Prefer brief, clear questions that can be answered accurately in a short spoken response. Complex, underspecified, highly technical, contentious, or research-dependent messages should be lower priority or held for later—not answered with fabricated certainty.
+3. **Trading stance:** `BULLISH`, `BEARISH`, `NEUTRAL`, `MIXED`, or `NOT_APPLICABLE`. This describes the market/trading view expressed by the message, not whether the message is positive or negative toward the streamer.
+   - Use `BULLISH` only when the supplied text clearly expresses an upward/positive market expectation or bullish trade thesis.
+   - Use `BEARISH` only when the supplied text clearly expresses a downward/negative market expectation or bearish trade thesis.
+   - Use `MIXED` when the message clearly presents competing or conditional bullish and bearish views.
+   - Use `NEUTRAL` for a clear market-related message that expresses no directional bias.
+   - Use `NOT_APPLICABLE` when no meaningful market direction can be inferred (for example, general feedback or a question about course navigation).
+   - Never infer direction simply from emotional tone, a ticker symbol, a question mark, or positivity/negativity toward the creator. Unclear direction must not be guessed.
+4. **Live-response priority:** `HIGH`, `NORMAL`, or `LOW`, based on usefulness, ease, relevance to the current stream/topic, clarity, and whether it can be addressed responsibly in a live response.
+5. **Confidence:** A separate value from moderation severity. Low-confidence classifications should be deprioritized or explicitly marked uncertain.
+
+A message can be bullish or bearish and still not be worth answering; likewise a valuable course or community question may be `NOT_APPLICABLE` for trading stance. These labels must remain separate.
+
+### Reply Finder output additions
+
+Each selected item should include the fields in the earlier Reply Finder contract plus:
+- `reply_worthiness`: concise reason/category explaining why it deserves the host's attention.
+- `ease_to_answer`: `EASY`, `MODERATE`, or `DIFFICULT`.
+- `trading_stance`: `BULLISH`, `BEARISH`, `NEUTRAL`, `MIXED`, or `NOT_APPLICABLE`.
+- `live_response_priority`: `HIGH`, `NORMAL`, or `LOW`.
+- `suggested_answer_angle`: short private cue for a spoken response, only when useful; not a full answer that is automatically published.
+- `confidence`: classification confidence.
+
+### Display/sorting behavior
+
+Default to a curated queue ordered by high live-response priority first, then EASY before MODERATE, and DIFFICULT last/held for later. Show trading-stance chips only when applicable. Offer optional dashboard filters for stance and ease. If no good messages are available, show a calm “No messages worth answering right now” empty state rather than filling the screen with noise.
+
+### Boundaries and tests
+
+- The Reply Finder must not decide moderation actions or overrule Prompt A's moderation assessment.
+- Abusive, threatening, scam or spam messages must not be placed in the ordinary reply queue merely because they contain a question or market opinion.
+- The dashboard should not state a trade is objectively bullish/bearish; it labels the stance expressed by the commenter, based on the supplied words.
+- Test clear bullish/bearish opinions, questions with no directional stance, mixed conditional opinions, non-trading comments, sarcastic/ambiguous messages, useful criticism, abusive bait, difficult multi-part questions and repeated questions.
