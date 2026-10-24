@@ -276,7 +276,7 @@ elif page == "Live Chat":
 
 elif page == "Reply Queue":
     st.subheader("Private Reply Finder queue")
-    st.info("This view will show selected questions and two-sentence suggested spoken answers after the live worker/provider adapters are connected.")
+    st.caption("Read the question here and answer verbally on stream. Nothing is posted to YouTube by this dashboard.")
     with db_session() as session:
         rows = session.execute(
             select(LiveMessageRecord, LiveMessageTask)
@@ -286,7 +286,7 @@ elif page == "Reply Queue":
                 LiveMessageTask.state == TaskState.COMPLETED.value,
             )
             .order_by(LiveMessageTask.completed_at.desc())
-            .limit(100)
+            .limit(250)
         ).all()
         shown = []
         for message, task in rows:
@@ -296,17 +296,73 @@ elif page == "Reply Queue":
                 result = {}
             if result.get("selected"):
                 shown.append({
-                    "Message": message.text,
-                    "Username": message.username or "Unknown",
-                    "Priority": result.get("priority", "—"),
-                    "Stance": result.get("trading_stance", "—"),
-                    "Ease": result.get("ease_to_answer", "—"),
-                    "Provider": task.provider or "Unknown",
+                    "task_id": task.id,
+                    "message_id": message.message_id,
+                    "message": message.text,
+                    "username": message.username or "Unknown viewer",
+                    "priority": result.get("priority", "NORMAL"),
+                    "stance": result.get("trading_stance", "NOT_APPLICABLE"),
+                    "ease": result.get("ease_to_answer", "MODERATE"),
+                    "question_type": result.get("question_type", "UNCLEAR"),
+                    "selection_reason": result.get("selection_reason", ""),
+                    "answer_angle": result.get("suggested_answer_angle"),
+                    "live_response": result.get("suggested_live_response"),
+                    "answer_validation": result.get("answer_validation", "NOT_CHECKED"),
+                    "needs_research": bool(result.get("needs_research", False)),
+                    "provider": task.provider or "Unknown",
                 })
-        if shown:
-            st.dataframe(shown, use_container_width=True, hide_index=True)
-        else:
-            st.caption("No selected messages are available yet. Shielded users' messages are filtered before Reply Finder requests are built.")
+
+    if shown:
+        st.caption(f"{len(shown)} selected message(s) waiting for your attention · showing the oldest unhandled item first")
+        item = shown[0]
+        with st.container(border=True):
+            st.subheader(item["username"])
+            meta1, meta2, meta3, meta4 = st.columns(4)
+            meta1.metric("Priority", item["priority"])
+            meta2.metric("Ease", item["ease"])
+            meta3.metric("Trading stance", item["stance"].replace("_", " ").title())
+            meta4.metric("Question type", item["question_type"].replace("_", " ").title())
+            st.markdown("**Viewer message**")
+            st.write(item["message"])
+            if item["selection_reason"]:
+                st.caption("Why selected: " + item["selection_reason"])
+            st.caption(f"AI provider: {item['provider']} · Message ID: {item['message_id']}")
+
+            st.divider()
+            if item["ease"] in ("MODERATE", "DIFFICULT"):
+                st.markdown("**Suggested two-sentence live response**")
+                if item["live_response"]:
+                    st.write(item["live_response"])
+                    if item["answer_validation"] == "REVIEW_REQUIRED":
+                        st.warning("Sentence-count check needs review. Treat this as a draft, not a verified answer.")
+                else:
+                    st.warning("No suggested response was produced. Skip this question or prepare an answer before responding.")
+            elif item["answer_angle"]:
+                st.markdown("**Quick answer cue**")
+                st.write(item["answer_angle"])
+            else:
+                st.caption("No answer cue was provided for this easy question.")
+
+            if item["needs_research"]:
+                st.warning("This question needs additional research. Do not present an unverified current or disputed fact as confirmed.")
+
+            left, right = st.columns(2)
+            if left.button("Mark answered", key=f"answered-{item['task_id']}", type="primary", use_container_width=True):
+                with db_session() as session:
+                    task = session.get(LiveMessageTask, item["task_id"])
+                    if task and task.state == TaskState.COMPLETED.value:
+                        task.state = TaskState.ANSWERED.value
+                        session.commit()
+                st.rerun()
+            if right.button("Skip / dismiss", key=f"dismiss-{item['task_id']}", use_container_width=True):
+                with db_session() as session:
+                    task = session.get(LiveMessageTask, item["task_id"])
+                    if task and task.state == TaskState.COMPLETED.value:
+                        task.state = TaskState.DISMISSED.value
+                        session.commit()
+                st.rerun()
+    else:
+        st.caption("No selected messages are waiting. The dashboard does not display the unfiltered chat feed.")
 
 elif page == "Past Videos Cleanup":
     st.subheader("Past Videos Cleanup")
