@@ -171,6 +171,14 @@ elif page == "Settings":
             step=250,
             help="Keeps room for the long instructions and output-format contract.",
         )
+        shield_threshold = st.number_input(
+            "Session Shield confidence threshold",
+            min_value=0.50,
+            max_value=1.00,
+            value=float(config.session_shield_confidence_threshold),
+            step=0.05,
+            help="A moderation suggestion must pass this threshold and match a violation category before the backend internally excludes the user from Reply Finder. This never mutes or bans them on YouTube.",
+        )
         providers = st.multiselect(
             "Providers available for testing",
             options=[ProviderName.GEMINI, ProviderName.QWEN],
@@ -212,6 +220,7 @@ elif page == "Settings":
                 max_messages_per_batch=int(max_messages),
                 max_input_tokens=int(max_tokens),
                 system_prompt_reserve_tokens=int(prompt_reserve),
+                session_shield_confidence_threshold=float(shield_threshold),
                 provider_strategy=strategy,
                 enabled_providers=tuple(providers),
                 max_attempts=int(max_attempts),
