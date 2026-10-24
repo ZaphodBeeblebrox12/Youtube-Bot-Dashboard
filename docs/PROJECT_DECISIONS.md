@@ -296,3 +296,31 @@ More likely to need help/context or a stronger-model/review fallback for:
 - difficult macroeconomic answers, current facts, disputed claims or anything needing careful sourcing.
 
 Use deterministic rules for duplicate/flood detection where possible. Start dry-run and evaluate on a labelled set of actual chat examples (including false positives and edge cases). Do not claim a universal accuracy percentage in advance. For difficult/current finance questions, use source-backed retrieval and show the citations in the private dashboard; the generated answer remains a draft for the host, never an auto-published response.
+
+
+## User-level Reply Finder exclusion list / attention whitelist (decision: 2026-10-24)
+
+The owner wants to keep the chat open, including antagonistic participants where appropriate, because their messages may contribute to live chat activity. However, once a user is identified as a hater/repeated antagonist or a potential moderation/ban candidate, the system should stop sending that user's messages to the **Reply Finder** and should not surface them in the private answer queue. This saves Reply Finder input tokens and reduces the chance of rewarding bait with on-stream attention.
+
+### Required behaviour
+- Add a user-level `reply_excluded` / “Do not surface in reply queue” state to the dashboard.
+- Before constructing the Reply Finder AI request, filter out messages from excluded users. Do not merely ask the model to ignore them after sending the messages; perform the exclusion in backend code before the API call to save input tokens.
+- Do not show excluded users' messages in the normal curated live queue. The host should not need to read them.
+- The exclusion applies to the Reply Finder/answer-assistance path only. **The moderation pipeline continues to screen incoming chat independently** for spam, threats, scams and other policy violations, unless a separate explicit policy decision changes this. Reply exclusion must not silently disable safety monitoring or erase evidence.
+- Make exclusion reversible. The dashboard should show who is excluded, the reason, who/what added the exclusion, when it was added, and allow a moderator to remove it.
+- Prefer the stable platform-supplied user/channel ID as the exclusion key. Store display name/handle as a label only because names can change or collide. If there is no stable ID in the incoming JSON, use a clearly marked fallback key and do not claim identity certainty.
+- An AI can suggest “repeated antagonist / do-not-surface candidate” based on supplied evidence, but ambiguous or subjective cases should be reviewable. Do not permanently exclude a user solely because they express a bearish/bullish view, disagree respectfully, criticize the creator or ask a challenging good-faith question.
+- Clear, repeated bait/harassment can be marked by a moderator or by a high-confidence proposed workflow. The owner should be able to add/remove exclusions manually.
+- Do not infer cross-account identity or apply one person's exclusion to a different account without reliable linking evidence.
+
+### Pipeline sketch
+1. Incoming messages are collected.
+2. Moderation pipeline processes them per existing policy.
+3. Backend checks each message's supplied stable user ID against the Reply Finder exclusion list.
+4. Only eligible messages are sent to the Reply Finder in token-budgeted batches.
+5. Selected messages are ranked and displayed in the private dashboard; excluded users never enter the ordinary reply queue.
+
+### Metrics and testing
+- Track counts/tokens for raw messages, messages excluded before Reply Finder, messages sent to each model, and approximate token/cost savings.
+- Test that excluded messages are absent from the serialized Reply Finder request (not just omitted from display), while the same messages still reach the moderation pipeline.
+- Test name changes for users with stable IDs, missing IDs, manual un-exclusion, and false-positive exclusions.
