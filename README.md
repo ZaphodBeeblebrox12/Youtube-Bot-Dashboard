@@ -12,7 +12,7 @@ A private livestream co-pilot that filters chat into a curated answer queue, whi
 
 The first implementation slice is a deterministic policy gate around AI classifications. It separates target, sentiment, and conduct type. Negative sentiment alone is never enough to propose deletion. Genuine criticism such as "This lesson is terrible and your explanation makes no sense" is kept by default. High-confidence personal abuse or another explicitly mapped violation can become a deletion candidate, but still requires owner approval.
 
-This package does not yet connect to YouTube or an AI provider and cannot delete comments. That separation is intentional: the policy decision is tested before wiring it to any API action.
+The initial Streamlit panel and live-queue data model are scaffolding only. YouTube OAuth, live ingestion, Gemini/Qwen API calls, provider prompt caching and actual deletion are not connected yet. No YouTube ban/mute/timeout/delete action is made by the live Session Shield path.
 
 ## Development
 
@@ -23,6 +23,7 @@ python -m venv .venv
 source .venv/bin/activate  # Windows: .venv\Scripts\activate
 python -m pip install -e ".[dev]"
 pytest
+streamlit run app.py
 ```
 
 ## Current implementation status
@@ -32,11 +33,17 @@ pytest
 - [x] Structured comment-cleanup prompt with mandatory keep examples for genuine criticism
 - [x] SQLAlchemy persistence models for monitored videos, comments, and text versions
 - [x] Incremental comment upsert (new / unchanged / edited) and classification queue primitives
+- [x] Persistent live message/task/batch records for separate moderation and Reply Finder pipelines
+- [x] Configurable live batch settings persisted to the database (2-second delay, 100-message cap, approximate token budget)
+- [x] Round-robin Gemini/Qwen batch routing state, with per-pipeline rotation and fixed-provider options
+- [x] Session Shield filtering before Reply Finder payload creation while moderation tasks continue independently
+- [x] Initial Streamlit settings/queue-status dashboard scaffold (no live source connected yet)
+- [x] Live moderation and Reply Finder system-prompt templates
 - [ ] PostgreSQL production configuration, migrations, and concurrency hardening
-- [ ] YouTube OAuth and comment ingestion
-- [ ] Durable incremental sweeps and job checkpoints
-- [ ] Gemini/Qwen AI adapters and schema validation
-- [ ] Private Reply Finder dashboard and two-sentence answer briefs
+- [ ] YouTube OAuth and live chat ingestion
+- [ ] Background worker and Gemini/Qwen provider adapters with response-schema validation
+- [ ] Provider-specific token counting/prompt caching and usage reconciliation
+- [ ] Fully implemented private Reply Finder card UI and two-sentence answer briefs
 - [ ] Preview/approval-based comment deletion integration
 - [ ] Active Moderation enforcement (future phase only)
 
