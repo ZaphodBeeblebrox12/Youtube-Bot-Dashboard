@@ -752,3 +752,34 @@ The owner wants viewers—especially returning members and people who contribute
 - `app.py`: Community Memory review workspace and one-glance returning-viewer/member cue inside the Reply Queue.
 - `tests/test_community_memory.py`, `tests/test_live_worker.py`, and `tests/test_live_prompts.py`: new test cases.
 - `youtube_auth.py`, `youtube_listener.py`, and `stream_list.proto`: optional local read-only YouTube streamList connection; the protobuf field number for live_chat_id is aligned with the documented schema. A real stream remains untested.
+
+
+## Live Polls workspace checkpoint (2026-10-25)
+
+The owner wants to create polls from the local dashboard, publish them to the active YouTube live chat, close them on demand, and save/view the final vote tallies.
+
+### Settled behaviour and API contract
+
+- **Drafts first:** The dashboard can store a question and 2–4 unique non-empty options before a broadcast exists. Previewing or saving a draft does not call YouTube.
+- **Explicit publication:** A draft is inserted only after the owner clicks **Launch poll on YouTube** and chooses an active chat. The request uses YouTube Data API `liveChatMessages.insert` with `snippet.type=pollEvent`, `pollDetails.metadata.questionText`, and `options[].optionText`.
+- **One poll per chat:** YouTube permits only one active poll per live chat. The dashboard checks local state before launch, and YouTube remains the authoritative guard against another active poll.
+- **Explicit end and result collection:** The owner clicks **End poll & collect results**. The app invokes `liveChatMessages.transition` with `status=closed` and `part=snippet`; the returned `pollDetails.metadata.options[].tally` values are saved with the poll result. It does not invent missing vote counts.
+- **Permissions:** Poll insertion and transition require `https://www.googleapis.com/auth/youtube` or `https://www.googleapis.com/auth/youtube.force-ssl`. OAuth now requests `youtube.force-ssl`. An existing token containing only `youtube.readonly` must be refreshed through the OAuth flow; the listener refuses to silently treat an insufficient token as poll-capable.
+- **No background posting:** Poll creation/closure happens only through deliberate dashboard actions. No poll launches automatically, and poll controls do not enable bans, timeouts, mutes, or deletes.
+- **Current active-chat source:** The launch selector uses active `LiveSessionRecord` rows with an actual `live_chat_id`, from either the direct listener or the authenticated JSON source. If no active chat exists, drafts remain available but launch is blocked.
+- **Result history:** Poll draft, YouTube message ID, launch response, status, final response/tallies, timestamps and latest action error are stored in `live_polls`. The UI shows a small results table and a bar chart only when returned tallies can be parsed as numbers.
+- **Testability:** Provider/service functions accept a fake YouTube service in tests. Automated tests cover draft validation, no publication when drafting, the insert request shape, active-poll guard, close/transition request and saved final tallies. The latest poll workflow test run completed with **73 passed in 2.89 seconds**; no real broadcast/OAuth smoke test has been possible yet.
+
+### Files touched
+
+- `src/youtube_bot_dashboard/live_polls.py`: database model, draft validation, state transitions and result parsing.
+- `src/youtube_bot_dashboard/youtube_polls.py`: explicit API calls to insert and close polls; token/service loading; durable result persistence.
+- `src/youtube_bot_dashboard/storage.py`: registers poll tables in local schema setup.
+- `src/youtube_bot_dashboard/youtube_auth.py` and `youtube_listener.py`: request/validate `youtube.force-ssl` scope for live poll operations plus chat reading.
+- `app.py`: **Live Polls** workspace with four option fields, offline drafts, live-chat selector, explicit launch/end buttons and persisted results.
+- `tests/test_live_polls.py`: local tests using a fake YouTube service.
+
+Official YouTube references:
+- Insert poll: https://developers.google.com/youtube/data/live/reference/rest/v3/liveChatMessages/insert
+- End a poll and obtain results: https://developers.google.com/youtube/data/live/reference/rest/v3/liveChatMessages/transition
+- Poll resource and the one-active-poll rule: https://developers.google.com/youtube/data/live/reference/rest/v3/liveChatMessages
