@@ -17,7 +17,6 @@ from sqlalchemy import func, select
 from youtube_bot_dashboard.community_memory import (
     CommunityMemory,
     CommunityViewerProfile,
-    CommunityViewerVisit,
     forget_saved_memory,
     forget_viewer,
     review_memory_suggestion,
@@ -91,7 +90,7 @@ def read_counts(session):
 
 
 st.title("YouTube Bot Dashboard")
-st.caption("Private live-stream control room · Early implementation scaffold")
+st.caption("Private live-stream control room · Local-first preparation build")
 
 with st.sidebar:
     st.header("Moderation levers")
@@ -136,8 +135,9 @@ if page == "Overview":
     st.caption("Provider routing: " + current_config.provider_strategy.value.replace("_", " ").title())
 
     st.info(
-        "YouTube OAuth and live chat ingestion are not connected yet. "
-        "This screen reports persisted local/development records only."
+        "The read-only YouTube streamList listener and OAuth setup code are available. "
+        "Actual OAuth and live-broadcast delivery still need verification when your channel is ready; "
+        "the authenticated JSON bridge remains available."
     )
     st.subheader("Safety status")
     st.write("Session Shield: ready in policy code; no public YouTube action.")
@@ -262,11 +262,11 @@ elif page == "Settings":
     st.write("AI API keys/model IDs, prompt caching, provider-specific token counting and cleanup schedule will be added with their adapters and background worker.")
     st.caption("Keep Gemini and Qwen credentials in environment variables or secret storage, never in these ordinary settings fields.")
     st.code("python -m youtube_bot_dashboard.live_worker", language="bash")
-    st.caption("Run the worker as a separate background process after setting DATABASE_URL and the selected provider's credentials/model environment variables. Direct YouTube polling is not connected yet; use the authenticated JSON ingest bridge until that connector is added.")
+    st.caption("Run the worker as a separate background process after setting DATABASE_URL and the selected provider's credentials/model environment variables. For direct YouTube intake, configure the OAuth Desktop client, run python -m youtube_bot_dashboard.youtube_auth, then python -m youtube_bot_dashboard.youtube_listener. Real-broadcast verification is pending; the authenticated JSON bridge also remains available.")
 
 elif page == "Live Chat":
     st.subheader("Live chat processing")
-    st.info("The authenticated normalized-JSON ingest API and background worker are implemented. Direct YouTube OAuth polling is not connected yet; a trusted source must post messages to the ingest endpoint.")
+    st.info("Messages can enter through the authenticated JSON bridge or the direct read-only YouTube streamList listener. The direct connector needs local OAuth setup and a real active-broadcast test before it is considered verified.")
     with db_session() as session:
         rows = list(session.scalars(
             select(LiveMessageTask).order_by(LiveMessageTask.queued_at.desc()).limit(100)
@@ -407,8 +407,9 @@ elif page == "Reply Queue":
                     if candidate.last_used_session_id != item["session_id"]
                 ), None)
             if profile and profile.distinct_sessions_seen >= 2:
+                member_label = "MEMBER · " if profile.is_member is True else ""
                 st.caption(
-                    f"RETURNING VIEWER · Seen in {profile.distinct_sessions_seen} streams · "
+                    f"{member_label}RETURNING VIEWER · Seen in {profile.distinct_sessions_seen} streams · "
                     f"First seen {profile.first_seen_at.strftime('%d %b %Y')}"
                 )
                 if memory:
@@ -534,6 +535,7 @@ elif page == "Community Memory":
         profiles_by_id = {profile.user_channel_id: profile for profile in profiles}
         st.dataframe([
             {
+                "Member": bool(profiles_by_id.get(memory.user_channel_id).is_member) if profiles_by_id.get(memory.user_channel_id) else False,
                 "Viewer": (profiles_by_id.get(memory.user_channel_id).display_name
                            if profiles_by_id.get(memory.user_channel_id)
                            and profiles_by_id.get(memory.user_channel_id).display_name
