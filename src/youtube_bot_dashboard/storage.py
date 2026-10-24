@@ -133,7 +133,14 @@ def create_engine_and_sessions(database_url: str) -> tuple[Engine, sessionmaker[
 
 
 def create_schema(engine: Engine) -> None:
-    """Create tables for local development/tests. Use migrations in production."""
+    """Create registered tables for local development/tests; use migrations in production.
+
+    Import the live queue models here so callers who use only this helper still
+    register all current model tables before create_all. Production deployments
+    should use versioned migrations rather than create_all.
+    """
+    from youtube_bot_dashboard import live_queue as _live_queue  # noqa: F401
+
     Base.metadata.create_all(engine)
 
 
