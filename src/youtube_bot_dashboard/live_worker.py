@@ -18,6 +18,7 @@ import time
 from sqlalchemy import select
 from dotenv import load_dotenv
 
+from youtube_bot_dashboard.community_memory import MEMORY_TYPES, create_memory_suggestion
 from youtube_bot_dashboard.live_queue import (
     AppSettingRecord,
     BatchState,
@@ -118,6 +119,45 @@ def _sentence_count(text: str) -> int:
     return len(parts) + (1 if tail else 0)
 
 
+def _normalize_community_memory(candidate, source: dict) -> dict:
+    """Fail closed: malformed or identity-free memory proposals become no-ops."""
+    empty = {
+        "save_candidate": False,
+        "memory_type": None,
+        "summary": "",
+        "suggested_follow_up": "",
+        "confidence": 0.0,
+    }
+    if not isinstance(candidate, dict) or not source.get("user_id"):
+        return empty
+    if candidate.get("save_candidate") is not True:
+        return empty
+    memory_type = candidate.get("memory_type")
+    summary = candidate.get("summary")
+    follow_up = candidate.get("suggested_follow_up")
+    confidence = candidate.get("confidence")
+    if (
+        memory_type not in MEMORY_TYPES
+        or not isinstance(summary, str)
+        or not isinstance(follow_up, str)
+        or not isinstance(confidence, (int, float))
+        or isinstance(confidence, bool)
+        or not 0.80 <= confidence <= 1.0
+    ):
+        return empty
+    summary = " ".join(summary.split()).strip()
+    follow_up = " ".join(follow_up.split()).strip()
+    if not summary or not follow_up:
+        return empty
+    return {
+        "save_candidate": True,
+        "memory_type": memory_type,
+        "summary": summary[:240],
+        "suggested_follow_up": follow_up[:240],
+        "confidence": float(confidence),
+    }
+
+
 def validate_reply_finder_response(parsed: dict, payload: dict) -> dict[str, dict]:
     """Validate only selections; unselected inputs are completed by the queue."""
     input_messages = {
@@ -177,6 +217,9 @@ def validate_reply_finder_response(parsed: dict, payload: dict) -> dict[str, dic
             "selected": True,
             "cluster_message_ids": cluster_ids,
         }
+        item["community_memory"] = _normalize_community_memory(
+            item.get("community_memory"), source
+        )
         mapped[message_id] = item
     return mapped
 
@@ -356,6 +399,30 @@ def process_prepared_batch(session_factory, batch_id: str, registry: ProviderReg
                 output_tokens=provider_result.output_tokens,
                 cached_input_tokens=provider_result.cached_input_tokens,
             )
+            memory_suggestions = []
+            if pipeline is LivePipeline.REPLY_FINDER:
+                source_by_id = {
+                    message["message_id"]: message
+                    for message in payload.get("messages", [])
+                    if isinstance(message, dict) and isinstance(message.get("message_id"), str)
+                }
+                for message_id, result in results_by_id.items():
+                    proposal = result.get("community_memory", {})
+                    source = source_by_id.get(message_id, {})
+                    if not proposal.get("save_candidate"):
+                        continue
+                    saved_candidate = create_memory_suggestion(
+                        session,
+                        user_channel_id=source.get("user_id"),
+                        session_id=session_id,
+                        source_message_id=message_id,
+                        memory_type=proposal.get("memory_type"),
+                        summary=proposal.get("summary", ""),
+                        suggested_follow_up=proposal.get("suggested_follow_up", ""),
+                        confidence=proposal.get("confidence", 0.0),
+                    )
+                    if saved_candidate is not None:
+                        memory_suggestions.append(saved_candidate.id)
             shielded_users = []
             if pipeline is LivePipeline.MODERATION:
                 shielded_users = apply_session_shield_suggestions(
@@ -374,6 +441,7 @@ def process_prepared_batch(session_factory, batch_id: str, registry: ProviderReg
             "completed_messages": completed,
             "retryable_messages": missing,
             "session_shield_users_added": shielded_users if pipeline is LivePipeline.MODERATION else [],
+            "community_memory_suggestion_ids": memory_suggestions if pipeline is LivePipeline.REPLY_FINDER else [],
             "input_tokens": provider_result.input_tokens,
             "output_tokens": provider_result.output_tokens,
             "cached_input_tokens": provider_result.cached_input_tokens,
