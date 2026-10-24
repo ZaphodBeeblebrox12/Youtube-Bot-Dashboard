@@ -141,6 +141,7 @@ def create_schema(engine: Engine) -> None:
     """
     from youtube_bot_dashboard import live_queue as _live_queue  # noqa: F401
     from youtube_bot_dashboard import community_memory as _community_memory  # noqa: F401
+    from youtube_bot_dashboard import live_polls as _live_polls  # noqa: F401
 
     Base.metadata.create_all(engine)
 
