@@ -1,7 +1,7 @@
-"""Initial Streamlit control panel for live queue settings and processing status.
+"""Streamlit control room for live chat, poll control, and community memory.
 
-This is an early-stage dashboard scaffold. YouTube OAuth and live ingestion are
-not wired yet, and this UI cannot ban, mute, timeout, delete, or publish anything.
+This UI does not ban, mute, time out, or delete YouTube users/comments. Polls are
+created/closed only when the owner presses the corresponding dashboard action.
 """
 
 from __future__ import annotations
@@ -39,6 +39,15 @@ from youtube_bot_dashboard.live_queue import (
 )
 from youtube_bot_dashboard.storage import create_engine_and_sessions, create_schema
 from youtube_bot_dashboard.providers.registry import ProviderRegistry
+from youtube_bot_dashboard.live_polls import (
+    POLL_ACTIVE,
+    POLL_CLOSED,
+    POLL_DRAFT,
+    LivePollRecord,
+    create_poll_draft,
+    poll_options,
+)
+from youtube_bot_dashboard.youtube_polls import end_poll_on_youtube, launch_poll_on_youtube
 
 
 load_dotenv()
@@ -100,7 +109,7 @@ with st.sidebar:
     st.caption("No YouTube bans, timeouts, mutes or deletions are connected in this version.")
     page = st.radio(
         "Workspace",
-        ["Overview", "Live Chat", "Reply Queue", "Community Memory", "Settings", "Past Videos Cleanup"],
+        ["Overview", "Live Chat", "Reply Queue", "Community Memory", "Live Polls", "Settings", "Past Videos Cleanup"],
         index=0,
     )
 
@@ -143,6 +152,172 @@ if page == "Overview":
     st.write("Session Shield: ready in policy code; no public YouTube action.")
     st.write("Active Moderation: disabled and not wired to enforcement APIs.")
     st.write("Past Videos Cleanup: policy and incremental-storage foundations exist; YouTube connection/scheduler are not connected.")
+
+elif page == "Live Polls":
+    st.subheader("Live Polls")
+    st.caption(
+        "Draft questions now, then launch them into YouTube live chat when a broadcast is active. "
+        "YouTube allows one active poll per chat; ending a poll requests the final result tallies."
+    )
+    st.info(
+        "Saving a draft or previewing it does not publish anything. Launch and End poll are explicit YouTube actions. "
+        "The connected OAuth account needs the live-chat poll scope."
+    )
+
+    with st.form("create_live_poll_draft"):
+        question = st.text_input(
+            "Poll question",
+            max_chars=160,
+            placeholder="What should we break down next?",
+        )
+        st.caption("Add 2–4 different options. Leave unused option fields blank.")
+        opt_a, opt_b = st.columns(2)
+        option_1 = opt_a.text_input("Option 1", max_chars=80, placeholder="Support and resistance")
+        option_2 = opt_b.text_input("Option 2", max_chars=80, placeholder="VWAP")
+        opt_c, opt_d = st.columns(2)
+        option_3 = opt_c.text_input("Option 3 (optional)", max_chars=80, placeholder="Risk management")
+        option_4 = opt_d.text_input("Option 4 (optional)", max_chars=80, placeholder="Trade review")
+        save_draft = st.form_submit_button("Save poll draft", type="primary", use_container_width=True)
+
+    if save_draft:
+        try:
+            with db_session() as session:
+                draft = create_poll_draft(
+                    session,
+                    question_text=question,
+                    options=[option_1, option_2, option_3, option_4],
+                )
+                draft_id = draft.id
+                session.commit()
+            st.success(f"Poll draft #{draft_id} saved. It has not been sent to YouTube.")
+            st.rerun()
+        except ValueError as exc:
+            st.error(str(exc))
+
+    st.divider()
+    st.subheader("Manage polls")
+    with db_session() as session:
+        poll_rows = list(session.scalars(
+            select(LivePollRecord).order_by(LivePollRecord.created_at.desc()).limit(50)
+        ))
+        active_sessions = list(session.scalars(
+            select(LiveSessionRecord)
+            .where(LiveSessionRecord.status == "ACTIVE", LiveSessionRecord.live_chat_id.is_not(None))
+            .order_by(LiveSessionRecord.started_at.desc())
+        ))
+
+    if not poll_rows:
+        st.caption("No poll drafts yet. Save a question above; you can prepare polls before the channel goes live.")
+    else:
+        poll_by_id = {poll.id: poll for poll in poll_rows}
+        selected_poll_id = st.selectbox(
+            "Choose a poll",
+            options=[poll.id for poll in poll_rows],
+            format_func=lambda poll_id: (
+                f"#{poll_id} · {poll_by_id[poll_id].status} · "
+                f"{poll_by_id[poll_id].question_text}"
+            ),
+        )
+        poll = poll_by_id[selected_poll_id]
+        with st.container(border=True):
+            st.caption(f"Poll #{poll.id} · {poll.status}")
+            st.markdown(f"**{poll.question_text}**")
+            current_options = poll_options(poll)
+            for index, option in enumerate(current_options, start=1):
+                st.write(f"{index}. {option}")
+            if poll.status == POLL_DRAFT:
+                st.caption("Preview only · this draft is not visible in YouTube chat.")
+                if active_sessions:
+                    active_by_id = {live_session.session_id: live_session for live_session in active_sessions}
+                    selected_session_id = st.selectbox(
+                        "Active YouTube live chat",
+                        options=[live_session.session_id for live_session in active_sessions],
+                        format_func=lambda session_id: (
+                            f"{active_by_id[session_id].broadcast_id or 'Broadcast'} · "
+                            f"{active_by_id[session_id].live_chat_id} · "
+                            f"{active_by_id[session_id].source}"
+                        ),
+                        key=f"poll-session-{poll.id}",
+                    )
+                    if st.button(
+                        "Launch poll on YouTube",
+                        type="primary",
+                        use_container_width=True,
+                        key=f"launch-poll-{poll.id}",
+                    ):
+                        try:
+                            outcome = launch_poll_on_youtube(
+                                SessionFactory,
+                                poll_id=poll.id,
+                                session_id=selected_session_id,
+                            )
+                            st.success("Poll launched in YouTube live chat.")
+                            st.caption(f"YouTube poll message ID: {outcome['youtube_message_id']}")
+                            st.rerun()
+                        except Exception as exc:
+                            st.error(f"Poll was not confirmed as launched: {exc}")
+                else:
+                    st.warning(
+                        "No active live chat is registered yet. You can keep drafting polls now; "
+                        "the launch control appears when the listener/source registers an active chat."
+                    )
+            elif poll.status == POLL_ACTIVE:
+                st.warning("This poll is live in YouTube chat. Ending it is an external action.")
+                if st.button(
+                    "End poll & collect results",
+                    type="primary",
+                    use_container_width=True,
+                    key=f"end-poll-{poll.id}",
+                ):
+                    try:
+                        outcome = end_poll_on_youtube(SessionFactory, poll_id=poll.id)
+                        st.success("YouTube poll closed and the returned results were saved.")
+                        st.rerun()
+                    except Exception as exc:
+                        st.error(f"Poll could not be confirmed as closed: {exc}")
+            elif poll.status == POLL_CLOSED:
+                st.success("Poll closed · results saved")
+                results = {}
+                try:
+                    results = json.loads(poll.results_json or "{}")
+                except json.JSONDecodeError:
+                    results = {}
+                result_options = results.get("options", [])
+                if result_options:
+                    st.dataframe(
+                        [
+                            {
+                                "Option": option.get("option_text", ""),
+                                "Votes": option.get("tally") if option.get("tally") is not None else "Not returned",
+                            }
+                            for option in result_options
+                        ],
+                        use_container_width=True,
+                        hide_index=True,
+                    )
+                    numeric_values = []
+                    for option in result_options:
+                        try:
+                            numeric_values.append(int(option.get("tally")))
+                        except (TypeError, ValueError):
+                            numeric_values.append(None)
+                    if numeric_values and all(value is not None for value in numeric_values):
+                        st.bar_chart(
+                            {
+                                "Option": [option.get("option_text", "") for option in result_options],
+                                "Votes": numeric_values,
+                            },
+                            x="Option",
+                            y="Votes",
+                        )
+                    if all(option.get("tally") is None for option in result_options):
+                        st.caption("YouTube did not include vote tallies in the transition response.")
+                else:
+                    st.caption("The poll was closed, but no option tallies were included in the saved response.")
+                if poll.closed_at:
+                    st.caption(f"Closed at: {poll.closed_at}")
+            if poll.last_error:
+                st.error("Last action error: " + poll.last_error)
 
 elif page == "Settings":
     st.subheader("Live AI queue settings")
