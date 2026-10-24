@@ -248,11 +248,11 @@ elif page == "Settings":
     st.write("AI API keys/model IDs, prompt caching, provider-specific token counting and cleanup schedule will be added with their adapters and background worker.")
     st.caption("Keep Gemini and Qwen credentials in environment variables or secret storage, never in these ordinary settings fields.")
     st.code("python -m youtube_bot_dashboard.live_worker", language="bash")
-    st.caption("Run the worker as a separate background process after setting DATABASE_URL and the selected provider's credentials/model environment variables. YouTube chat ingestion is not connected yet.")
+    st.caption("Run the worker as a separate background process after setting DATABASE_URL and the selected provider's credentials/model environment variables. Direct YouTube polling is not connected yet; use the authenticated JSON ingest bridge until that connector is added.")
 
 elif page == "Live Chat":
     st.subheader("Live chat processing")
-    st.info("The queue data model and batching primitives are in place, but YouTube OAuth/live chat ingestion and the background worker are not connected yet.")
+    st.info("The authenticated normalized-JSON ingest API and background worker are implemented. Direct YouTube OAuth polling is not connected yet; a trusted source must post messages to the ingest endpoint.")
     with db_session() as session:
         rows = list(session.scalars(
             select(LiveMessageTask).order_by(LiveMessageTask.queued_at.desc()).limit(100)
