@@ -18,6 +18,7 @@ import time
 from sqlalchemy import select
 
 from youtube_bot_dashboard.live_queue import (
+    AppSettingRecord,
     BatchState,
     LiveAIRequestBatch,
     LiveMessageTask,
@@ -228,6 +229,50 @@ def apply_session_shield_suggestions(
     return sorted(set(shielded_users))
 
 
+def _claim_request_slot(session_factory, minimum_interval_seconds: float) -> None:
+    """Persist the global AI request start time and enforce a minimum start gap.
+
+    The initial worker is a single consumer. Multi-worker deployments require
+    an atomic database lease/lock before enabling more than one worker.
+    """
+    while True:
+        wait_seconds = 0.0
+        with session_factory() as session:
+            now = utc_now()
+            row = session.get(AppSettingRecord, "live_last_ai_request_started_at", with_for_update=True)
+            last_started = None
+            if row is not None:
+                try:
+                    last_started = datetime.fromisoformat(row.value)
+                    if last_started.tzinfo is None:
+                        last_started = last_started.replace(tzinfo=timezone.utc)
+                    else:
+                        last_started = last_started.astimezone(timezone.utc)
+                except (ValueError, TypeError):
+                    last_started = None
+
+            if last_started is not None:
+                elapsed = (now - last_started).total_seconds()
+                wait_seconds = minimum_interval_seconds - elapsed
+
+            if wait_seconds <= 0:
+                if row is None:
+                    row = AppSettingRecord(
+                        key="live_last_ai_request_started_at",
+                        value=now.isoformat(),
+                        updated_at=now,
+                    )
+                    session.add(row)
+                else:
+                    row.value = now.isoformat()
+                    row.updated_at = now
+                session.commit()
+                return
+
+        # Do not hold a database connection while waiting for the next request slot.
+        time.sleep(wait_seconds)
+
+
 def _effective_config(config: LiveQueueConfig, registry: ProviderRegistry) -> LiveQueueConfig | None:
     available = registry.available()
     if config.provider_strategy is ProviderStrategy.ROUND_ROBIN:
@@ -279,6 +324,7 @@ def process_prepared_batch(session_factory, batch_id: str, registry: ProviderReg
         else REPLY_FINDER_SYSTEM_PROMPT
     )
     try:
+        _claim_request_slot(session_factory, config.minimum_request_interval_seconds)
         with session_factory() as session:
             stored = session.get(LiveAIRequestBatch, batch_id)
             if stored is None or stored.status != BatchState.PREPARED.value:
