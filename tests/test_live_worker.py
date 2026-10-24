@@ -17,6 +17,7 @@ from youtube_bot_dashboard.live_worker import (
     process_prepared_batch,
     validate_moderation_response,
     validate_reply_finder_response,
+    _normalize_community_memory,
 )
 from youtube_bot_dashboard.providers.base import ProviderResponse, ProviderError
 from youtube_bot_dashboard.providers.registry import ProviderRegistry
@@ -376,3 +377,20 @@ def test_low_confidence_shield_suggestion_does_not_exclude_user():
             assert session.scalar(select(SessionShieldRecord.id)) is None
     finally:
         engine.dispose()
+
+
+def test_community_memory_candidate_is_bounded_and_requires_stable_identity():
+    source = {"user_id": "source-user-1", "username": "Viewer 1"}
+    candidate = {
+        "save_candidate": True,
+        "memory_type": "CHALLENGE",
+        "summary": " Keeps entering too early after identifying support ",
+        "suggested_follow_up": "Has that improved since our last stream?",
+        "confidence": 0.93,
+    }
+    normalized = _normalize_community_memory(candidate, source)
+    assert normalized["save_candidate"] is True
+    assert normalized["summary"] == "Keeps entering too early after identifying support"
+    assert _normalize_community_memory(candidate, {"user_id": None})["save_candidate"] is False
+    assert _normalize_community_memory({**candidate, "confidence": 0.79}, source)["save_candidate"] is False
+    assert _normalize_community_memory({**candidate, "memory_type": "BANK_BALANCE"}, source)["save_candidate"] is False
