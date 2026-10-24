@@ -16,6 +16,7 @@ import re
 import time
 
 from sqlalchemy import select
+from dotenv import load_dotenv
 
 from youtube_bot_dashboard.live_queue import (
     AppSettingRecord,
@@ -438,6 +439,7 @@ def run_worker_once(session_factory, registry: ProviderRegistry, *, now: datetim
 
 
 def main() -> None:
+    load_dotenv()
     logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
     database_url = os.getenv("DATABASE_URL", "sqlite:///./youtube_bot_dashboard.db")
     poll_interval = max(0.1, float(os.getenv("LIVE_WORKER_POLL_SECONDS", "0.25")))
