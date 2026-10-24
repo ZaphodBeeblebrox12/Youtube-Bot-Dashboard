@@ -341,3 +341,23 @@ The owner wants to keep the chat open, including antagonistic participants where
 The initial version can detect and log likely rule violations, store supporting message evidence, identify repeat antagonism, and use that result to activate Session Shield. It must not call YouTube enforcement endpoints or apply punitive actions. Make this unmistakable in UI wording: “Excluded from reply suggestions until this session ends” rather than “banned”, “timed out” or “restricted”.
 
 Keep future active enforcement as a separate, disabled mode that the owner may choose to enable later as the channel grows. When building that future mode, include explicit settings and a confirmation step before any real sanctions are issued, plus dry-run/preview testing, audit logs, appeals and override mechanisms. The planned session / 7-day / 30-day / permanent escalation ladder belongs to that future mode only.
+
+
+## Future enforcement rulebook — required before enabling bans (backlog, 2026-10-24)
+
+The owner has explicitly noted that **a separate, detailed ban-rule policy will be needed later**, when the channel is ready for active enforcement. This is a future requirement, not permission to enable enforcement now. Session Shield remains the only initial automated action and is non-punitive.
+
+Before turning on any ban/timeout API actions, design and obtain the owner's approval for a versioned enforcement rulebook covering:
+
+1. **Definitions and examples per violation:** personal attacks, harassment, spam/flooding, hate speech, threats, doxxing/privacy violations, scams/phishing, unsolicited promotion, impersonation, and deliberate disruption. Include clear positive examples, non-violations, ambiguous/contextual cases, and prompt-injection tests.
+2. **Evidence standard:** require exact source message IDs and supporting text/context; distinguish observed facts from AI interpretation. Define minimum confidence and when moderator review is required.
+3. **Severity and action mapping:** define which rule breaches qualify for a strike, the minimum severity/confidence for automatic action, and which cases may warrant urgent protective review. An AI score alone must never trigger a permanent ban.
+4. **Strike counting and deduplication:** define one incident versus repeated incidents; do not count every message in a spam burst as a separate offence. Define when separate messages form one harassment incident and how overturned cases affect strike history.
+5. **Escalation ladder:** planned future stages are first qualifying offence = current-session timeout; second = 7 days; third = 30 days; fourth = permanent. Confirm how session boundaries work on the actual platform and whether/how strikes expire before launch.
+6. **Critical violations:** define precisely how credible threats, doxxing, credential theft and clear scams are handled, including whether immediate platform protection is permitted, review expectations, and how to avoid auto-banning from uncertain accusations.
+7. **Fairness and protected discussion:** do not sanction respectful disagreement, bearish/bullish views, criticism of the creator or teaching, good-faith questions, jokes without harmful context, quotations/reporting of abuse, or a losing trade by themselves.
+8. **Repeated antagonism and user exclusions:** separate Session Shield (hides a user from the Reply Finder for the current session) from formal sanctions. Do not treat a Reply Finder exclusion as a strike or ban. Do not infer ban evasion across accounts without reliable linking evidence.
+9. **Review, appeals and reversals:** define moderator approval levels, an appeal path, overturning a decision, restoring strike state, and recording who made or changed a decision.
+10. **Safety rollout and controls:** explicit owner-controlled enablement, dry-run/pre-enforcement report, staged rollout, kill switch, audit logs, monitoring, and tests. No enforcement API call until the feature is deliberately enabled and tests have passed.
+
+Treat this rulebook as a release gate: until it is written, reviewed, tested against labelled chat examples and explicitly approved by the owner, the application must remain in non-punitive launch mode.
