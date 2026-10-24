@@ -1,7 +1,7 @@
 """Private, lightweight viewer memory for meaningful livestream follow-ups.
 
 Viewer activity is indexed only by the stable channel ID supplied by the source.
-Only short, owner-approved memory suggestions are retained; no public reply is sent.
+Short suggestions await owner review; only approved memories become saved viewer cues.
 """
 from __future__ import annotations
 
