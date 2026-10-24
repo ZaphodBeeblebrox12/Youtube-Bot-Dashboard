@@ -644,6 +644,40 @@ The repository previously contained planning documentation without application c
 - `tests/test_comment_cleanup_policy.py` and `tests/test_storage.py` cover the policy and persistence behaviour.
 - `.github/workflows/tests.yml` runs pytest on pushes to and pull requests targeting `main`.
 
-**Verification:** the local test suite reports **22 passed**, and `compileall` completed successfully on the local copy of this first code slice. GitHub Actions status has not yet been confirmed. The code has no live YouTube connection, no Gemini/Qwen adapter, no dashboard UI, and no delete/banning API calls yet. The storage helper's `create_schema` is for development/tests; PostgreSQL migrations, production concurrency hardening and deployment configuration remain future implementation tasks.
+**Verification status:** test files were authored for this first slice, but a completed local/GitHub test run has not been verified in this environment. A local clone attempt failed because the environment could not resolve github.com, and GitHub status queries returned no reported status checks. Treat test execution as pending until CI logs or a local run confirm it. No live YouTube connection, Gemini/Qwen API adapters, or comment-deletion/ban API calls exist yet. The storage helper's `create_schema` is for development/tests; PostgreSQL migrations, production concurrency hardening and deployment configuration remain future implementation tasks.
 
 **Policy examples:** “This lesson is terrible and your explanation makes no sense” is explicitly KEEP when classified as content criticism; it must not be deleted solely for negative sentiment. “You are an idiot and should never teach anyone” can be a deletion candidate only if a validated assessment classifies it as personal abuse with sufficient confidence and the owner approves the deletion. The policy gate never calls the deletion API.
+
+
+## Live chat batch queue and settings checkpoint (2026-10-25)
+
+A live-chat queue slice and an initial Streamlit control panel have been added on `main`.
+
+### Settled live-chat defaults
+- **Batch delay:** 2 seconds by default. It is stored in the database and adjustable from Settings; supported range is 0.25–30 seconds.
+- **Maximum batch size:** 100 messages by default, but the queue flushes on the 2-second age of the oldest queued message or when the cap is reached—whichever occurs first. It does not wait for 100 messages if chat is slower.
+- **Input-token budget:** default estimated total 12,000 tokens, with 3,000 tokens reserved for system instructions. The current estimate is only a heuristic; provider-specific token counting is still required before production.
+- **Provider choice:** default is round-robin between Gemini and Qwen, independently per pipeline, for comparison. The settings model also supports pinning a pipeline to Gemini only or Qwen only. API adapters are not connected yet.
+- **Separate pipelines:** each incoming message creates an independently tracked moderation task and Reply Finder task. The moderator pipeline continues for a shielded user; Session Shield only filters that user's messages out of the Reply Finder payload.
+- **Per-message state:** pending, batched, sent, completed, retryable/final failure, or excluded by Session Shield. Every batch stores its provider, payload, response, token usage, timestamps and status.
+- **Partial provider response:** missing message IDs in moderation results are retryable; Reply Finder results intentionally include only selected messages, so non-selected inputs are recorded as completed/not selected. Unknown IDs are ignored by the current persistence helper; response schema validation still needs to be implemented before provider integration.
+- **Provider rotation and message statuses are database-backed** to preserve work tracking across application restarts.
+
+### Code added
+- `src/youtube_bot_dashboard/live_queue.py`: live sessions, Session Shield records, message tasks, batches, database settings, round-robin provider cursor, batch delay check, approximate token budgeting, response completion/retry helpers.
+- `src/youtube_bot_dashboard/prompts/live_moderation.py`: non-punitive live moderation classifier prompt.
+- `src/youtube_bot_dashboard/prompts/reply_finder.py`: curated reply selection, stance labels, priority, and exactly two spoken sentences for moderate/difficult questions.
+- `app.py`: initial Streamlit scaffold for overview/settings/queue status, with light theme. It clearly indicates that YouTube and AI connections are not yet active.
+- `tests/test_live_queue.py` and `tests/test_live_prompts.py`: queue/configuration/prompt test cases.
+- `.streamlit/config.toml`: light theme.
+
+### Known limitations / next implementation
+- No YouTube OAuth or actual live chat ingestion is connected.
+- No concrete Gemini/Qwen API request adapters or provider caching are connected; provider routing currently records which provider should receive each batch.
+- The worker that polls due batches, commits before network calls, invokes the provider adapter, validates returned JSON against the exact input IDs and persists the answer is not yet implemented.
+- The 2-second batch window is represented in backend scheduling primitives; a continuously running background worker has not yet been wired.
+- Production concurrent claims need PostgreSQL `FOR UPDATE SKIP LOCKED` or an equivalent lease mechanism and migration-managed schema.
+- Token caps use a character-based estimate and must be replaced/validated with each provider's token counter before live use.
+- Tests have been written but are not claimed as passing until an actual test run is verified.
+
+Active Moderation remains disabled. No YouTube ban, mute, timeout, delete or reply-posting action is enabled by this checkpoint.
