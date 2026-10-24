@@ -25,3 +25,8 @@ htmlcov/
 *.sqlite
 *.sqlite3
 *.log
+
+# YouTube OAuth credentials and tokens
+client_secret*.json
+.youtube-oauth-token.json
+token.json
