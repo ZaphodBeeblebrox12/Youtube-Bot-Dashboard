@@ -475,3 +475,43 @@ Add a separate dashboard tool called **Past Videos Cleanup**. Its purpose is to 
 - Ensure preview mode performs zero deletion calls.
 - Ensure auto-delete is off by default, requires explicit enabling and only deletes high-confidence, correctly targeted matches.
 - Ensure this tool does not change Session Shield state, strikes or future ban policy.
+
+
+### Rolling sweeps and incremental comment processing (decision: 2026-10-24)
+
+Refinement to Past Videos Cleanup: this is not a one-time report. Run repeated sweeps during a **rolling 20-day monitoring window for each video**. Keep a durable record of every discovered comment/reply so each sweep can distinguish first-seen comments from already-processed comments.
+
+#### Scope and schedule
+- Retain the existing target set of the channel's latest 20 uploaded videos unless a later product decision changes it.
+- Each video has its own 20-day monitoring window, anchored to that video's publication time. The scheduler repeatedly sweeps comments for each video while it is inside that window. Video A's monitoring window must not be tied to the upload date of Video B.
+- Make the sweep interval configurable; don't hard-code a cadence before checking YouTube API quota and likely comment volume. Show last sweep, next sweep, monitoring-window start/end, and status per video.
+- On first setup, perform an initial historical import for each monitored video's in-scope comments. After that, incremental sweeps use persistent comment IDs to avoid duplicate AI evaluation.
+- Once a video's 20-day monitoring window has ended, stop its scheduled rolling cleanup sweeps by default. Its stored comment records and deletion audit history remain available. If the owner later requests a manual rescan, it can be initiated explicitly.
+
+#### Store every discovered comment, not only flagged comments
+- Save every retrieved top-level comment and every reply in the database, including non-negative comments. Store video ID, comment ID, parent comment/thread ID, author channel ID/display name when available, text, published/updated timestamps where available, first-seen timestamp, last-seen timestamp, moderation/classification state, and relevant API metadata.
+- Enforce a unique key on the YouTube comment ID (and use video ID as an additional consistency field) so repeated sweeps safely upsert rather than duplicate rows.
+- Store processing state such as `DISCOVERED`, `QUEUED_FOR_AI`, `AI_CLASSIFIED`, `REVIEW_REQUIRED`, `DELETE_APPROVED`, `DELETED`, `FAILED_RETRYABLE`, and `SKIPPED`. Record model/provider/version and classification timestamp for any AI assessment.
+- Keep an audit trail when a comment is edited, becomes unavailable, is approved/deleted, or an API operation fails. Retention should be configurable and proportionate; keep IDs/status/audit records long enough to prevent duplicate AI spend and repeated delete attempts.
+
+#### Only new comments go to the AI
+- After each sweep, compare each retrieved comment ID with the persistent database.
+- A comment ID never seen before is inserted and placed in the AI queue. Batch only these newly discovered comments for the target/sentiment classifier.
+- Already-classified comment IDs must never be sent to the AI again during normal sweeps. Their stored result is reused.
+- If an existing comment is discovered again, update last-seen metadata but don't re-evaluate or spend AI tokens on it.
+- Newly discovered replies under old threads count as new comments and are queued once, even if the parent thread is old.
+- If an AI call fails or returns invalid JSON, retain the item as retryable and retry the failed item; don't mark it classified or lose it.
+- If a comment is edited after being classified, record the new version/hash. Do not silently reprocess it in the normal incremental flow; place it in an explicit optional “edited comments to reassess” queue or follow a future owner-configurable edit policy.
+- Keep the first-time import distinct from later sweeps. On first setup, every comment fetched for the initial historical import is new to this database and may be queued once for classification. Afterward only unseen IDs are sent.
+
+#### API discovery limitations and implementation considerations
+- YouTube's `commentThreads.list` supports pagination with `nextPageToken`, and a thread may not contain every reply; use `comments.list` to retrieve remaining replies when needed.
+- The documented comment-thread listing method does not expose a generic `publishedAfter` filter. Therefore, do not assume the API can return only new comments directly. Sweep/query strategy must be designed to discover newly added replies as well as new top-level comments, while database ID-based deduplication ensures previously seen comments do not consume AI tokens again.
+- API read quota and sweep frequency are separate from AI token cost. Measure comment-list calls, page counts, retries and quota consumption. Use maximum supported page sizes, pagination checkpoints and bounded incremental strategies where correctness is preserved. Don't stop scanning solely because the first page contains old comments unless the ordering guarantees and reply-discovery strategy have been verified.
+- One AI call can receive a batch of new comments, but do not send already-processed comment text again just to fill the batch.
+- The delete API only accepts an exact comment ID and requires appropriate channel authorization; maintain separate per-comment approval and deletion status. Preview mode must make zero deletion calls.
+
+#### Reporting and tests
+- Per video: comments found, first-seen/new comments, previously known comments, replies found, sent to AI, already classified/skipped, candidates, deleted, pending review, failures, last/next sweep and monitoring-window state.
+- Global usage: total AI input/output tokens and estimated cost attributable only to newly classified comments; API quota used by sweeps.
+- Test repeat sweeps with no new comments (zero additional AI submissions), one new top-level comment, a new reply in an old thread, duplicate pages, interrupted pagination, AI failure/retry, edited comment, process restart, a video reaching its 20-day window end, and a manual rescan.
