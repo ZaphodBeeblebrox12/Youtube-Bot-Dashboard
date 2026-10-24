@@ -27,6 +27,7 @@ from youtube_bot_dashboard.live_queue import (
     update_live_queue_config,
 )
 from youtube_bot_dashboard.storage import create_engine_and_sessions, create_schema
+from youtube_bot_dashboard.providers.registry import ProviderRegistry
 
 
 st.set_page_config(
@@ -46,6 +47,7 @@ def get_database():
 
 
 engine, SessionFactory = get_database()
+provider_registry = ProviderRegistry.from_environment()
 
 
 @contextmanager
@@ -100,6 +102,17 @@ if page == "Overview":
     c2.metric("Pipeline tasks", tasks)
     c3.metric("Pending / in-flight", pending)
     c4.metric("Batches recorded", batches)
+
+    st.subheader("AI providers")
+    provider_columns = st.columns(2)
+    for column, provider in zip(provider_columns, [ProviderName.GEMINI, ProviderName.QWEN]):
+        if provider_registry.has(provider):
+            adapter = provider_registry.get(provider)
+            column.success(f"{provider.value.title()} configured")
+            column.caption(f"Model: {adapter.model_id}")
+        else:
+            column.warning(f"{provider.value.title()} not configured")
+            column.caption("Set the provider credentials/model in environment secrets.")
 
     st.subheader("Live queue configuration")
     col1, col2, col3 = st.columns(3)
@@ -215,6 +228,8 @@ elif page == "Settings":
     st.subheader("Not yet configurable here")
     st.write("AI API keys/model IDs, prompt caching, provider-specific token counting and cleanup schedule will be added with their adapters and background worker.")
     st.caption("Keep Gemini and Qwen credentials in environment variables or secret storage, never in these ordinary settings fields.")
+    st.code("python -m youtube_bot_dashboard.live_worker", language="bash")
+    st.caption("Run the worker as a separate background process after setting DATABASE_URL and the selected provider's credentials/model environment variables. YouTube chat ingestion is not connected yet.")
 
 elif page == "Live Chat":
     st.subheader("Live chat processing")
