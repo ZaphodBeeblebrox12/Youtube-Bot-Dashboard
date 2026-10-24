@@ -101,3 +101,57 @@ Prefer a readable light theme unless repository inspection or a later decision e
 ## Work discipline
 
 Do not make implementation assumptions before inspecting code and input examples. Keep classifier, policy/strike engine and platform enforcement separate. Do not enable live bans until dry-run results and tests have been reviewed.
+
+
+## Batch sizing decision (2026-10-24)
+
+Start with **25 chat messages per batch**, configurable in the range of 20–50 messages. Treat this as an initial operating setting to test, not a hard platform limit. Do not rely on message count alone: estimate/count tokens and split batches when the configured input budget is exceeded. A batch of 100 short messages may fit, while 100 long messages with context may not. Test 100-message batches only after the smaller setting proves accurate and reliable.
+
+Implementation guidance:
+- Trigger processing when either 25 new messages arrive or a short flush timer expires (initial target: about 3–5 seconds), whichever comes first; flush any remaining batch at end of stream/session.
+- Enforce a configurable **input-token budget** per provider/model and preserve room for the system prompt, context and structured JSON output. Use the provider's tokenizer/counting facility when available; otherwise use a conservative estimate and handle provider token-limit errors by splitting and retrying.
+- Keep adjacent context minimal and clearly distinguish context messages from candidate messages. Never count context-only messages as new offences.
+- Track actual input/output tokens, latency, retries, and output-validation failures per model. Tune batch size using measured quality/cost/latency, not guesswork.
+- Batch limits, context windows and rate limits are model/provider specific; look up the selected model configuration rather than hard-coding a universal maximum.
+
+## Second AI system: Reply Finder / Personal Attention Queue (2026-10-24)
+
+The product needs a second, independent AI prompt/system whose goal is to protect the channel owner's attention and surface the chat messages genuinely worth responding to. The owner wants to avoid manually reading a constant stream of potentially demoralizing chat.
+
+This system is **not** the moderation classifier and must not replace or change the moderation result. It creates a curated “Worth your attention” / “Reply queue” for the owner. The moderation system still processes all available messages according to its own policy and keeps its records.
+
+### Messages the Reply Finder should surface
+- Genuine questions about trading concepts, risk, strategies, lessons or the community.
+- Good-faith disagreements or thoughtful challenges that would benefit from an answer.
+- Constructive criticism and actionable product/course feedback.
+- Members sharing relevant experiences, trade reviews, experiments or insights that invite discussion.
+- Supportive, appreciative or community-building messages.
+- Important unresolved requests for help.
+- A new topic or high-value discussion that the owner could meaningfully contribute to.
+
+### Messages it should normally omit
+- Personal attacks, abusive remarks, harassment, hate speech, threats, doxxing or scams.
+- Spam, repeated/near-duplicate messages, promotional bait and low-value flooding.
+- Pure provocation, bad-faith argument bait, repetitive noise or messages that do not reasonably invite a response.
+- Duplicates of a question already represented in the queue, unless new information materially changes it.
+
+Do not equate “worth answering” with “positive only”: a respectful critical question or good-faith disagreement can be highly valuable. Do not surface an abusive message merely because it contains a question. When a message is ambiguous, prioritize keeping the owner’s queue focused; borderline items can go to an optional low-priority/review section.
+
+### Reply Finder output contract
+
+Return valid structured JSON only, with a list of selected messages/items. Each item should include:
+- exact supplied message ID and stable user ID/username if present (never invent identifiers);
+- message text and timestamp as supplied;
+- type (for example `QUESTION`, `CONSTRUCTIVE_CRITICISM`, `THOUGHTFUL_DISAGREEMENT`, `USEFUL_INSIGHT`, `SUPPORTIVE`, `HELP_REQUEST`, `COMMUNITY_DISCUSSION`);
+- short reason it deserves attention;
+- priority (high/normal/low);
+- optional response angle or suggested draft reply, clearly labelled as a suggestion and never automatically posted;
+- confidence, separated from the moderation severity score.
+
+The output may be an empty list when no messages merit a response. Deduplicate related messages and cluster multiple people asking the same question, while retaining references to each original message. Display the original message and context to the owner. Do not automatically send replies.
+
+### Processing design
+Run moderation and reply finding as two logically separate classifiers/prompts so their goals and thresholds can be tuned independently. They may initially process the same message batch, but reuse prepared input/context where practical. The reply finder must not determine bans, increment strikes, or erase moderation records. Build a queue so the owner can review only selected messages, mark them answered/dismissed/saved, and optionally copy a suggested reply.
+
+### Validation
+Test both systems independently with good questions, respectful criticism, helpful disagreement, encouragement, spam, harassment, bait, mixed abusive/question messages, duplicate questions, prompt injection and ambiguous context. Measure moderation false positives separately from reply-finder precision/recall. Start with dry-run logging and a configurable visibility threshold before relying on the reply queue.
