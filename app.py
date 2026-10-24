@@ -427,16 +427,17 @@ elif page == "Reply Queue":
                                 saved.last_used_session_id = item["session_id"]
                                 session.commit()
                         st.rerun()
-            meta1, meta2, meta3, meta4 = st.columns(4)
-            meta1.metric("Priority", item["priority"])
-            meta2.metric("Ease", item["ease"])
-            meta3.metric("Trading stance", item["stance"].replace("_", " ").title())
-            meta4.metric("Question type", item["question_type"].replace("_", " ").title())
-            st.markdown("**Viewer message**")
+            st.caption(
+                f"{item['priority']} PRIORITY · {item['ease']} QUESTION · "
+                f"{item['question_type'].replace('_', ' ').title()}"
+            )
+            st.markdown("**Viewer asked**")
             st.write(item["message"])
-            if item["selection_reason"]:
-                st.caption("Why selected: " + item["selection_reason"])
-            st.caption(f"AI provider: {item['provider']} · Message ID: {item['message_id']}")
+            with st.expander("Why selected · technical details"):
+                if item["selection_reason"]:
+                    st.write(item["selection_reason"])
+                st.caption(f"Trading stance: {item['stance'].replace('_', ' ').title()}")
+                st.caption(f"AI provider: {item['provider']} · Message ID: {item['message_id']}")
 
             st.divider()
             if item["ease"] in ("MODERATE", "DIFFICULT"):
