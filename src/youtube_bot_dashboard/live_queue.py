@@ -69,6 +69,7 @@ class LiveQueueConfig:
     batch_delay_seconds: float = 2.0
     max_messages_per_batch: int = 100
     max_input_tokens: int = 12_000
+    system_prompt_reserve_tokens: int = 3_000
     provider_strategy: ProviderStrategy = ProviderStrategy.ROUND_ROBIN
     enabled_providers: tuple[ProviderName, ...] = (ProviderName.GEMINI, ProviderName.QWEN)
     max_attempts: int = 3
@@ -81,6 +82,8 @@ class LiveQueueConfig:
             raise ValueError("max_messages_per_batch must be between 1 and 500")
         if not 1_000 <= self.max_input_tokens <= 100_000:
             raise ValueError("max_input_tokens must be between 1000 and 100000")
+        if not 0 <= self.system_prompt_reserve_tokens < self.max_input_tokens - 100:
+            raise ValueError("system_prompt_reserve_tokens must leave at least 100 input tokens for messages")
         if self.max_attempts < 1 or self.retry_base_seconds < 1:
             raise ValueError("retry settings must be positive")
         if not self.enabled_providers:
@@ -241,6 +244,7 @@ def get_live_queue_config(session: Session) -> LiveQueueConfig:
         batch_delay_seconds=float(get("live_batch_delay_seconds", "2.0")),
         max_messages_per_batch=int(get("live_max_messages_per_batch", "100")),
         max_input_tokens=int(get("live_max_input_tokens", "12000")),
+        system_prompt_reserve_tokens=int(get("live_system_prompt_reserve_tokens", "3000")),
         provider_strategy=ProviderStrategy(strategy_raw),
         enabled_providers=tuple(ProviderName(p) for p in providers_raw),
         max_attempts=int(get("live_max_attempts", "3")),
@@ -254,6 +258,7 @@ def update_live_queue_config(session: Session, config: LiveQueueConfig) -> None:
         "live_batch_delay_seconds": str(config.batch_delay_seconds),
         "live_max_messages_per_batch": str(config.max_messages_per_batch),
         "live_max_input_tokens": str(config.max_input_tokens),
+        "live_system_prompt_reserve_tokens": str(config.system_prompt_reserve_tokens),
         "live_provider_strategy": config.provider_strategy.value,
         "live_enabled_providers": json.dumps([p.value for p in config.enabled_providers]),
         "live_max_attempts": str(config.max_attempts),
@@ -585,19 +590,39 @@ def prepare_due_batch(
     batch_id = str(uuid.uuid4())
     messages = []
     claimed_tasks = []
+    pending_payload = {
+        "session_id": session_id,
+        "pipeline": pipeline.value,
+        "messages": [],
+    }
+    payload_budget = config.max_input_tokens - config.system_prompt_reserve_tokens
     for task in tasks:
         message = session.get(LiveMessageRecord, task.message_id)
         if message is None:
             task.state = TaskState.FAILED_FINAL.value
             task.last_error = "Live message record is missing."
             continue
-        messages.append({
+        item = {
             "message_id": message.message_id,
             "user_id": message.user_channel_id,
             "username": message.username,
             "published_at": message.published_at.isoformat() if message.published_at else None,
             "text": message.text,
-        })
+        }
+        candidate_payload = {**pending_payload, "messages": [*messages, item]}
+        estimated_payload_tokens = estimate_message_tokens(candidate_payload)
+        if estimated_payload_tokens > payload_budget:
+            if not claimed_tasks:
+                # Do not silently drop/ truncate a single message that cannot fit.
+                # Mark it as final failure so an operator can see the error.
+                task.state = TaskState.FAILED_FINAL.value
+                task.last_error = (
+                    f"Single message exceeds estimated payload budget of {payload_budget} tokens; "
+                    "review/truncate manually or adjust the model/budget."
+                )
+            # Keep this task and all later tasks pending for the next batch.
+            break
+        messages.append(item)
         claimed_tasks.append(task)
 
     if not claimed_tasks:
@@ -642,12 +667,23 @@ def mark_live_batch_sent(
     *,
     model_id: str,
     sent_at: datetime | None = None,
-) -> None:
+) -> dict:
+    """Transition PREPARED -> SENT and return the current persisted payload.
+
+    Always send this returned payload, not the possibly stale snapshot originally
+    returned by prepare_due_batch: Session Shield may have removed a user while
+    the batch was waiting to be sent.
+    """
     batch = session.get(LiveAIRequestBatch, batch_id)
     if batch is None:
         raise ValueError(f"unknown batch_id {batch_id!r}")
     if batch.status != BatchState.PREPARED.value:
         raise ValueError(f"cannot send batch in state {batch.status}")
+    payload = json.loads(batch.payload_json)
+    if not payload.get("messages"):
+        batch.status = BatchState.CANCELLED.value
+        session.flush()
+        raise ValueError("cannot send an empty batch; it was cancelled or shielded")
     now = sent_at or utc_now()
     batch.status = BatchState.SENT.value
     batch.model_id = model_id
@@ -656,11 +692,19 @@ def mark_live_batch_sent(
         LiveMessageTask.batch_id == batch_id,
         LiveMessageTask.state == TaskState.BATCHED.value,
     )))
+    payload_ids = {item.get("message_id") for item in payload["messages"]}
     for task in tasks:
+        if task.message_id not in payload_ids:
+            task.state = TaskState.EXCLUDED_SHIELDED.value
+            task.batch_id = None
+            task.provider = None
+            task.last_error = "Removed from batch before send."
+            continue
         task.state = TaskState.SENT.value
         task.attempt_count += 1
         task.sent_at = now
     session.flush()
+    return payload
 
 
 def complete_live_batch(
