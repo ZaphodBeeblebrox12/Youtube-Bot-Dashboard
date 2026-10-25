@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import os
 from contextlib import contextmanager
+from datetime import datetime, timedelta, timezone
 from html import escape
 
 import streamlit as st
@@ -47,6 +48,13 @@ from youtube_bot_dashboard.message_retention import (
     run_live_message_retention_cleanup,
 )
 from youtube_bot_dashboard.providers.registry import ProviderRegistry
+from youtube_bot_dashboard.provider_analytics import (
+    PRICE_FIELDS,
+    ProviderRateCard,
+    get_provider_analytics,
+    load_provider_rate_card,
+    save_provider_rate_card,
+)
 from youtube_bot_dashboard.live_polls import (
     POLL_ACTIVE,
     POLL_CLOSED,
@@ -816,7 +824,7 @@ elif page == "Settings":
         )
         providers = st.multiselect(
             "Providers available for testing",
-            options=[ProviderName.GEMINI, ProviderName.QWEN],
+            options=[ProviderName.GEMINI, ProviderName.QWEN, ProviderName.DEEPSEEK, ProviderName.KIMI],
             default=list(config.enabled_providers),
             format_func=lambda provider: provider.value.title(),
         )
@@ -826,18 +834,24 @@ elif page == "Settings":
                 ProviderStrategy.ROUND_ROBIN,
                 ProviderStrategy.GEMINI_ONLY,
                 ProviderStrategy.QWEN_ONLY,
+                ProviderStrategy.DEEPSEEK_ONLY,
+                ProviderStrategy.KIMI_ONLY,
             ],
             index=[
                 ProviderStrategy.ROUND_ROBIN,
                 ProviderStrategy.GEMINI_ONLY,
                 ProviderStrategy.QWEN_ONLY,
+                ProviderStrategy.DEEPSEEK_ONLY,
+                ProviderStrategy.KIMI_ONLY,
             ].index(config.provider_strategy),
             format_func=lambda option: {
-                ProviderStrategy.ROUND_ROBIN: "Alternate batches between enabled providers",
+                ProviderStrategy.ROUND_ROBIN: "Round robin across enabled providers",
                 ProviderStrategy.GEMINI_ONLY: "Gemini only",
                 ProviderStrategy.QWEN_ONLY: "Qwen only",
+                ProviderStrategy.DEEPSEEK_ONLY: "DeepSeek only",
+                ProviderStrategy.KIMI_ONLY: "Kimi only",
             }[option],
-            help="Round-robin advances independently for moderation and reply-finder queues to compare each task type fairly.",
+            help="Round robin advances independently for Moderation and Reply Finder. Fixed-provider modes are useful for controlled comparisons; retries stay with the originally assigned provider.",
         )
         max_attempts = st.number_input(
             "Maximum provider attempts per batch item",
