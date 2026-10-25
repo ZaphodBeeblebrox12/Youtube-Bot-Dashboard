@@ -855,3 +855,11 @@ All cards must use live database-backed data. Do not invent live viewer counts o
 - The cleanup is transaction-based and must fail closed on malformed stored batch payloads. Existing content hashes/metadata remain for deduplication/audit.
 - This policy stops retaining old raw bodies; database files may reuse freed pages without shrinking their physical file size. SQLite/PostgreSQL compaction is a separate maintenance action, not part of this dial.
 
+## Canonical dashboard template — locked design baseline (2026-10-25)
+
+The user-designated file `docs/reference/approved-dashboard-template.html` is the canonical visual reference for the YouTube Bot Dashboard. The template must remain as-is. Features and behavior may be added, but the runtime must preserve the reference's page hierarchy, top metrics, sidebar/navigation, chat and detail columns, lower summary panels, styling, spacing, typography, colors, and responsive behavior.
+
+Implement working behavior in the real application (`app.py`), not by editing the static reference to imitate a runtime. Any visual redesign, rearrangement, restyling or change to the canonical HTML requires the user's explicit approval. Use initials/monograms only; do not add profile pictures or profile-image storage. Treat all data shown by the static reference as illustrative, not live. The reply workflow remains: **Use as reply → edit draft → explicit Send**.
+
+The binding instructions and file provenance are recorded in `docs/DASHBOARD_TEMPLATE_STANDARD.md`. The exact canonical HTML was copied into the repository without design edits.
+
