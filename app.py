@@ -530,7 +530,6 @@ elif page == "Filtered Chat":
                 profiles = list(session.scalars(
                     select(CommunityViewerProfile).where(
                         CommunityViewerProfile.user_channel_id.in_(user_ids),
-                        CommunityViewerProfile.last_seen_at >= cutoff,
                     )
                 ))
                 profiles_by_id = {profile.user_channel_id: profile for profile in profiles}
@@ -642,7 +641,7 @@ elif page == "Filtered Chat":
                         name_col.markdown(f"**{item['username']}**")
                         profile = item["profile"]
                         if profile and profile.distinct_sessions_seen >= 2:
-                            name_col.caption(f"↻ Returning · {profile.distinct_sessions_seen} streams in the last {COMMUNITY_RETENTION_DAYS} days")
+                            name_col.caption(f"↻ Returning · Seen in {profile.distinct_sessions_seen} streams")
                         if profile and profile.is_member is True:
                             name_col.caption("★ YouTube member")
                         time_col.caption(
@@ -1226,7 +1225,7 @@ elif page == "Community Memory":
     st.subheader("Community Memory")
     st.caption(
         "A quiet reminder for meaningful returning viewers. Ordinary chat text is not saved as a memory. "
-        "Only the stable channel ID, basic visit history, and a short memory you approve are kept."
+        "A compact viewer profile helps recognize returning people. Detailed per-stream visits and approved personal memories expire after three days."
     )
     with db_session() as session:
         purge_expired_community_data(session)
