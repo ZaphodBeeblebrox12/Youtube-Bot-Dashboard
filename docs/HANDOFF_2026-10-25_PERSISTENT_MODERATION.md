@@ -212,3 +212,12 @@ The owner explicitly requires that remembered community context be retained for 
 
 The adjacent glance-first filtered-chat requirements remain in force: the live feed is the default reading surface, raw chat is not mixed into it, and returning-viewer context is shown inline without clutter.
 
+## 11. Latest filtered-chat and three-day retention implementation status (2026-10-25)
+
+- Current feature head after this change set: see the open PR/branch for the live SHA. Work remains on feature/persistent-moderation; main is untouched and nothing was deployed.
+- The default workspace is now Filtered Chat, refreshing every three seconds and showing only messages that pass the existing safety + Reply Finder-selection gate. Shielded/persistently restricted users remain hidden. The newest 250 messages are rendered chronologically so the latest is at the bottom; the scrolling container uses Streamlit 1.66+ sticky autoscroll and a small Jump to latest · N new control keyed to newly selected message IDs.
+- Returning viewer and source-confirmed membership labels are shown separately. Saved personal memory is exposed from the feed on demand; no repetitive cleared labels are shown.
+- Three-day retention is implemented in community_memory.py: pending/saved memories expire three days after creation; viewer profile/visit history is a rolling three-day window; full-table purge is globally throttled per process to hourly intervals, while a viewer returning after an expired history has that stale viewer data cleared immediately. The Community Memory workspace also purges before listing its contents.
+- tests/test_community_memory.py now covers expired saved/pending memory, stale profile/visit deletion, rolling counts and fresh history after a return beyond the window. The time-dependent Shield batch test now calculates its due timestamp from the actual current UTC time.
+- **Verification caveat:** The latest recorded Actions run is [40169805354](https://github.com/ZaphodBeeblebrox12/Youtube-Bot-Dashboard/actions/runs/40169805354), which failed one timing-sensitive test because its test clock was hard-coded to midnight; 114 other tests passed. That test has been fixed, but there is no newer Actions result for the current branch head yet. Do not claim the current code has a green full suite until that is confirmed.
+
