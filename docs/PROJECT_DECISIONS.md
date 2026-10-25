@@ -161,15 +161,15 @@ Run moderation and reply finding as two logically separate classifiers/prompts s
 Test both systems independently with good questions, respectful criticism, helpful disagreement, encouragement, spam, harassment, bait, mixed abusive/question messages, duplicate questions, prompt injection and ambiguous context. Measure moderation false positives separately from reply-finder precision/recall. Start with dry-run logging and a configurable visibility threshold before relying on the reply queue.
 
 
-## Dashboard as private live-stream producer screen (decision: 2026-10-24)
+## Dashboard as private live-stream co-pilot (revised: 2026-10-25)
 
-The owner does **not** want to reply inside the dashboard or have the bot publish replies. The dashboard is a private, curated screen for the streamer/host to read during the live stream. The owner reads a selected viewer message on the dashboard and answers it verbally on stream, so the public sees and hears the response, while the owner avoids reading the unfiltered chat feed.
+The dashboard is a private, curated screen for the streamer/host. The selected viewer message and suggested response remain private until the owner explicitly acts. **Use as reply** loads the suggestion into an editable draft; the owner can revise it freely. Only a separate, deliberate **Send** click publishes the final edited text to the associated active YouTube live chat. Never send a draft automatically, on selection, on edit, or on a rerun. Keep the editable draft visible until the send result is confirmed, and report failures without claiming the message was sent.
 
 ### Required UX
 - The default view shows only messages selected by the Reply Finder, not the raw/unfiltered chat.
 - Each card should display the original viewer message, username/handle and timestamp when supplied, plus a concise reason the AI selected it.
 - The owner can move to the next item, mark it answered, skip/dismiss it, or save it for later.
-- Do not post messages or suggested answers to YouTube/chat automatically. Suggested answer angles are private prompts for the streamer, not published replies.
+- Suggested answers are private drafts. Selecting a suggestion never posts it. The owner edits the text and must click Send separately to publish it to the associated active YouTube chat.
 - Avoid UI that forces the owner to scroll past a raw wall of chat. Keep any raw-log/audit view separate and intentional, not the default live-stream screen.
 - Make the queue readable at a glance while the owner is presenting; use clear typography and small, consistent classification labels.
 

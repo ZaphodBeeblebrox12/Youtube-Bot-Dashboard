@@ -163,7 +163,7 @@ def create_schema(engine: Engine) -> None:
     live_message_columns = {
         column["name"] for column in inspect(engine).get_columns("live_messages")
     }
-    super_chat_columns = {
+    live_message_columns_to_add = {
         "is_super_chat": "BOOLEAN NOT NULL DEFAULT FALSE",
         "super_chat_amount_micros": "BIGINT",
         "super_chat_currency": "VARCHAR(3)",
@@ -172,7 +172,7 @@ def create_schema(engine: Engine) -> None:
     }
     missing = [
         (name, definition)
-        for name, definition in super_chat_columns.items()
+        for name, definition in live_message_columns_to_add.items()
         if name not in live_message_columns
     ]
     if missing:
