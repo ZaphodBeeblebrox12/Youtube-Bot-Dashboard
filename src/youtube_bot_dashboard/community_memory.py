@@ -5,7 +5,7 @@ Short suggestions await owner review; only approved memories become saved viewer
 """
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from threading import Lock
 from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, select, func, delete
 from sqlalchemy.orm import Mapped, Session, mapped_column
@@ -20,6 +20,13 @@ COMMUNITY_RETENTION_DAYS = 3
 CLEANUP_INTERVAL = timedelta(hours=1)
 _RETENTION_CLEANUP_LOCK = Lock()
 _LAST_RETENTION_CLEANUP_AT: datetime | None = None
+
+
+def _as_utc(value: datetime) -> datetime:
+    """Normalize SQLite's naive datetimes and aware PostgreSQL datetimes to UTC."""
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
 
 
 class CommunityViewerProfile(Base):
@@ -180,7 +187,7 @@ def record_viewer_activity(
     _ensure_community_retention_cleanup(session)
     profile = session.get(CommunityViewerProfile, user_channel_id)
     retention_cutoff = utc_now() - timedelta(days=COMMUNITY_RETENTION_DAYS)
-    if profile is not None and profile.last_seen_at < retention_cutoff:
+    if profile is not None and _as_utc(profile.last_seen_at) < retention_cutoff:
         # If an inactive viewer returns between scheduled purges, remove their
         # expired continuity data now instead of reviving out-of-window history.
         session.execute(
