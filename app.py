@@ -606,7 +606,7 @@ elif page == "Filtered Chat":
         elif not displayed_items:
             st.info("No comments are ready to show yet. New comments appear here only after they pass the filters.")
         else:
-            with st.container(height=620, border=True):
+            with st.container(height=500, border=True, autoscroll=True, key="filtered_live_chat_feed"):
                 for item in displayed_items:
                     with st.container(border=False):
                         name_col, time_col = st.columns([5, 1])
