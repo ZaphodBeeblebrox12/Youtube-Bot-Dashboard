@@ -996,6 +996,66 @@ elif page == "Moderation Review":
         st.dataframe(audit_items, use_container_width=True, hide_index=True)
     else:
         st.caption("No moderation audit events recorded yet.")
+ 
+    st.divider()
+    st.markdown("#### Session Shield · internal AI exclusion")
+    st.caption("Shielded viewers can still chat on YouTube. Their later messages are excluded from both AI pipelines for the rest of the current session.")
+    with db_session() as session:
+        shield_rows = session.execute(
+            select(SessionShieldRecord, LiveSessionRecord)
+            .join(LiveSessionRecord, LiveSessionRecord.session_id == SessionShieldRecord.session_id)
+            .where(SessionShieldRecord.active.is_(True), LiveSessionRecord.status == "ACTIVE")
+            .order_by(SessionShieldRecord.created_at.desc())
+        ).all()
+        shield_items = [
+            {
+                "id": shield.id,
+                "username": shield.display_name or "Unknown viewer",
+                "user_id": shield.user_channel_id,
+                "session_id": shield.session_id,
+                "reason": shield.reason,
+                "confidence": shield.confidence,
+                "source": shield.source,
+                "created_at": shield.created_at,
+            }
+            for shield, _live_session in shield_rows
+        ]
+    if shield_items:
+        st.dataframe([
+            {
+                "Viewer": item["username"],
+                "Reason": item["reason"],
+                "Confidence": item["confidence"],
+                "Source": item["source"],
+                "Added": item["created_at"],
+                "Session": item["session_id"],
+            }
+            for item in shield_items
+        ], use_container_width=True, hide_index=True)
+        option_ids = [item["id"] for item in shield_items]
+        labels = {
+            item["id"]: f"{item['username']} · {item['session_id']}"
+            for item in shield_items
+        }
+        selected_shield_id = st.selectbox(
+            "Remove an internal filter",
+            options=option_ids,
+            format_func=lambda value: labels[value],
+        )
+        if st.button("Remove Session Shield for selected viewer", use_container_width=True):
+            selected = next(item for item in shield_items if item["id"] == selected_shield_id)
+            with db_session() as session:
+                did_remove = unshield_user_for_session(
+                    session,
+                    session_id=selected["session_id"],
+                    user_channel_id=selected["user_id"],
+                )
+                session.commit()
+            if did_remove:
+                st.success("Internal filter removed for future messages in this session. Previously excluded messages are not automatically requeued.")
+                st.rerun()
+    else:
+        st.caption("No active Session Shield exclusions.")
 
 elif page == "Reply Queue":
     st.subheader("Private Reply Finder queue")
