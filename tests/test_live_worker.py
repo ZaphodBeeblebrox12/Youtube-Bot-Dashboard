@@ -18,6 +18,7 @@ from youtube_bot_dashboard.live_worker import (
     validate_moderation_response,
     validate_reply_finder_response,
     _normalize_community_memory,
+    validate_reply_finder_output,
 )
 from youtube_bot_dashboard.providers.base import ProviderResponse, ProviderError
 from youtube_bot_dashboard.providers.registry import ProviderRegistry
@@ -84,6 +85,7 @@ def test_reply_finder_uses_source_identity_and_checks_two_sentences():
             }
         ]
     }
+    response["memory_candidates"] = []
     mapped = validate_reply_finder_response(response, payload)
     assert mapped["m-1"]["user_id"] == "source-user-1"
     assert mapped["m-1"]["username"] == "Viewer 1"
@@ -101,7 +103,7 @@ def test_reply_finder_invalid_selected_message_is_rejected():
                 "priority": "NORMAL",
                 "confidence": 0.8,
                 "cluster_message_ids": ["not-in-payload"],
-            }]},
+            }], "memory_candidates": []},
             simple_payload(),
         )
 
@@ -239,7 +241,7 @@ class FakeDualPurposeProvider:
                     "cluster_message_ids": [message["message_id"]],
                 })
             return ProviderResponse(
-                text=json.dumps({"selected_messages": selected}),
+                text=json.dumps({"selected_messages": selected, "memory_candidates": []}),
                 model_id=self.model_id,
                 input_tokens=180,
                 output_tokens=50,
@@ -396,6 +398,43 @@ def test_community_memory_candidate_is_bounded_and_requires_stable_identity():
     assert _normalize_community_memory({**candidate, "memory_type": "BANK_BALANCE"}, source)["save_candidate"] is False
 
 
+def test_reply_finder_memory_candidate_is_independent_of_selection_and_uses_source_identity():
+    payload = simple_payload()
+    payload["messages"][1]["text"] = "I've been using the checklist but still enter breakouts too early."
+    response = {
+        "selected_messages": [],
+        "memory_candidates": [{
+            "message_id": "m-2",
+            "save_candidate": True,
+            "memory_type": "CHALLENGE",
+            "summary": "Working on waiting for breakout confirmation",
+            "suggested_follow_up": "Has the checklist helped with your entries?",
+            "confidence": 0.91,
+            "user_id": "hallucinated-user",
+        }],
+    }
+
+    selected, candidates = validate_reply_finder_output(response, payload)
+    assert selected == {}
+    assert candidates["m-2"]["message_id"] == "m-2"
+    assert candidates["m-2"]["user_id"] == "source-user-2"
+
+
+def test_reply_finder_rejects_memory_candidate_from_unknown_message():
+    with pytest.raises(ProviderError, match="memory candidate included an unknown message_id"):
+        validate_reply_finder_output(
+            {"selected_messages": [], "memory_candidates": [{
+                "message_id": "invented",
+                "save_candidate": True,
+                "memory_type": "CHALLENGE",
+                "summary": "Invented viewer detail",
+                "suggested_follow_up": "Are you still working on this?",
+                "confidence": 0.95,
+            }]},
+            simple_payload(),
+        )
+
+
 class FakeCommunityMemoryProvider:
     provider_name = "GEMINI"
     model_id = "gemini-memory-test-model"
@@ -404,26 +443,15 @@ class FakeCommunityMemoryProvider:
         message = payload["messages"][0]
         return ProviderResponse(
             text=json.dumps({
-                "selected_messages": [{
+                "selected_messages": [],
+                "memory_candidates": [{
                     "message_id": message["message_id"],
-                    "question_type": "HELP_REQUEST",
-                    "ease_to_answer": "MODERATE",
-                    "trading_stance": "NOT_APPLICABLE",
-                    "priority": "HIGH",
-                    "selection_reason": "The viewer explains an ongoing learning challenge.",
-                    "suggested_answer_angle": None,
-                    "suggested_live_response": "It is common to enter too early even when a level looks clear. Compare the entry trigger with the invalidation point and review whether waiting for confirmation would help.",
-                    "needs_research": False,
-                    "confidence": 0.95,
-                    "cluster_message_ids": [message["message_id"]],
-                    "community_memory": {
-                        "save_candidate": True,
-                        "memory_type": "CHALLENGE",
-                        "summary": "Often enters too early after identifying support",
-                        "suggested_follow_up": "Has waiting for confirmation helped with your entries?",
-                        "confidence": 0.94,
-                    },
-                }]
+                    "save_candidate": True,
+                    "memory_type": "CHALLENGE",
+                    "summary": "Often enters too early after identifying support",
+                    "suggested_follow_up": "Has waiting for confirmation helped with your entries?",
+                    "confidence": 0.94,
+                }],
             }),
             model_id=self.model_id,
             input_tokens=260,
@@ -475,5 +503,12 @@ def test_reply_finder_creates_owner_reviewable_community_memory_suggestion():
             assert memories[0].status == "SUGGESTED"
             assert memories[0].user_channel_id == "channel-meaningful"
             assert memories[0].summary == "Often enters too early after identifying support"
+            from youtube_bot_dashboard.live_queue import LiveMessageTask
+            saved_task = session.scalar(select(LiveMessageTask).where(
+                LiveMessageTask.message_id == "m-memory",
+                LiveMessageTask.pipeline == LivePipeline.REPLY_FINDER.value,
+            ))
+            assert saved_task.state == "COMPLETED"
+            assert json.loads(saved_task.result_json)["selected"] is False
     finally:
         engine.dispose()

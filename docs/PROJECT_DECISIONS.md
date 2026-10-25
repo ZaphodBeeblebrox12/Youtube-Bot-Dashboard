@@ -793,3 +793,17 @@ Official YouTube references:
 - **Super Chat detection:** The direct streamList listener stores YouTube-supplied amount micros, currency, amount display string, and tier. Empty-comment Super Chats are still ingested. The normalized JSON bridge accepts equivalent fields from its trusted source.
 - **Super Chat priority:** Pending Super Chats are placed before ordinary chat in AI batches and trigger preparation immediately rather than waiting for the normal two-second window. The Reply Finder prompt treats a paid message as priority when its content is constructive.
 - **Display safety:** Ordinary messages are shown only after a completed high-confidence `NO_VIOLATION` result and Reply Finder selection. Super Chats can bypass the usefulness-selection requirement but still require that same completed, high-confidence safety clearance. The unfiltered control stays off by default.
+
+
+## Reply Finder memory independence refinement (2026-10-25)
+
+The user confirmed the intended behavior: Reply Finder must protect the host's attention with a curated queue of worthwhile interactions, while separately recognizing meaningful details about returning viewers. These are two independent decisions in the **same AI request**.
+
+- `selected_messages` contains only messages worth addressing live now.
+- A separate top-level `memory_candidates` array may cite any message in the supplied batch, even if that message was not selected for the Reply Queue.
+- Do not put memory candidates only inside selected message objects; that accidentally makes memory depend on reply-selection.
+- Backend validation must verify every candidate's exact source message ID and obtain identity exclusively from the source payload. Unknown IDs are errors; absent/invalid stable user IDs fail closed.
+- Persist only explicitly shared, non-sensitive, meaningful details (ongoing challenge, goal, progress, milestone, insight, preference) with confidence at least 0.80. No memory for generic questions, greetings, generic praise, membership badge alone, abuse, spam, or harmful content.
+- Keep the existing single AI pass, one pending suggestion and two saved memories per viewer, private owner approval, forget controls, and no auto-posting/greeting.
+- This change does not alter the separate Moderation classifier, Session Shield, strike policy, or sanction enforcement.
+

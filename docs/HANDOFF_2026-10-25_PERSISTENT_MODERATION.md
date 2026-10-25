@@ -103,6 +103,16 @@ The goal is for returning community members—and viewers who contribute thought
 
 The repo notes say this behavior is implemented in `community_memory.py`, `live_queue.py`, `prompts/reply_finder.py`, `live_worker.py` and the Community Memory / Reply Queue UI in `app.py`; the README also lists meaningful-memory suggestions, owner review, the two-memory limit, forget controls and returning-viewer cues as implemented. Preserve and test existing functionality while delivering persistent moderation. Actual live-broadcast delivery still needs real-stream verification.
 
+
+
+## 3B. Reply Finder prompt refinement — separate selection from memory
+
+The prompt/backend are being refined so the AI makes two independent decisions in one Reply Finder request:
+1. `selected_messages`: what deserves a live response now.
+2. `memory_candidates`: which supplied message contains a genuinely useful, explicit, non-sensitive detail for future recognition, whether or not that message was selected for the queue.
+
+Do not put memory suggestions only inside each selected message. That coupling prevents a worthwhile detail from being remembered when the message isn't a good fit for today's live queue. Backend must validate candidates against exact supplied message IDs and use stable source identity, with no invented identity. Keep the one-call design, confidence threshold, memory limits, owner approval, privacy and no-auto-greeting/no-auto-posting rules. See the “Reply Finder memory independence refinement” entry in `docs/PROJECT_DECISIONS.md` for the settled decision.
+
 ## 4. Important gap: persistent strikes, sanctions, blacklist and enforcement
 
 Before declaring moderation complete, inspect the current source again. At the checkpoint above, there is a `SessionShieldRecord`, but no complete persistent offence/strike/sanction domain model and policy engine implementing the agreed escalation ladder. The current repository also does not yet carry out the full authorized YouTube enforcement workflow.

@@ -128,7 +128,8 @@ def _normalize_community_memory(candidate, source: dict) -> dict:
         "suggested_follow_up": "",
         "confidence": 0.0,
     }
-    if not isinstance(candidate, dict) or not source.get("user_id"):
+    source_user_id = source.get("user_id")
+    if not isinstance(candidate, dict) or not isinstance(source_user_id, str) or not source_user_id.strip():
         return empty
     if candidate.get("save_candidate") is not True:
         return empty
@@ -158,8 +159,8 @@ def _normalize_community_memory(candidate, source: dict) -> dict:
     }
 
 
-def validate_reply_finder_response(parsed: dict, payload: dict) -> dict[str, dict]:
-    """Validate only selections; unselected inputs are completed by the queue."""
+def validate_reply_finder_output(parsed: dict, payload: dict) -> tuple[dict[str, dict], dict[str, dict]]:
+    """Validate reply selections and independent memory candidates against source IDs."""
     input_messages = {
         item["message_id"]: item
         for item in payload.get("messages", [])
@@ -207,8 +208,13 @@ def validate_reply_finder_response(parsed: dict, payload: dict) -> dict[str, dic
                 }
         else:
             item = {**item, "answer_validation": "NOT_REQUIRED"}
-        # Preserve exact source identity, not an AI-inferred identity.
+        # Preserve exact source identity, not an AI-inferred identity. Memory
+        # candidates are validated separately below, including for unselected items.
         source = input_messages[message_id]
+        item = {
+            key: value for key, value in item.items()
+            if key != "community_memory"
+        }
         item = {
             **item,
             "message_id": message_id,
@@ -217,11 +223,35 @@ def validate_reply_finder_response(parsed: dict, payload: dict) -> dict[str, dic
             "selected": True,
             "cluster_message_ids": cluster_ids,
         }
-        item["community_memory"] = _normalize_community_memory(
-            item.get("community_memory"), source
-        )
         mapped[message_id] = item
-    return mapped
+
+    candidates = parsed.get("memory_candidates")
+    if not isinstance(candidates, list):
+        raise ProviderError("Reply Finder response is missing memory_candidates.")
+    mapped_candidates: dict[str, dict] = {}
+    for candidate in candidates:
+        if not isinstance(candidate, dict):
+            raise ProviderError("Reply Finder memory candidate must be an object.")
+        message_id = candidate.get("message_id")
+        if not isinstance(message_id, str) or message_id not in input_messages:
+            raise ProviderError("Reply Finder memory candidate included an unknown message_id.")
+        if message_id in mapped_candidates:
+            raise ProviderError(f"Reply Finder duplicated memory candidate for {message_id!r}.")
+        source = input_messages[message_id]
+        normalized = _normalize_community_memory(candidate, source)
+        if normalized["save_candidate"]:
+            mapped_candidates[message_id] = {
+                **normalized,
+                "message_id": message_id,
+                "user_id": source.get("user_id"),
+            }
+    return mapped, mapped_candidates
+
+
+def validate_reply_finder_response(parsed: dict, payload: dict) -> dict[str, dict]:
+    """Return validated Reply Finder selections (without the separate memory list)."""
+    selected, _ = validate_reply_finder_output(parsed, payload)
+    return selected
 
 
 def apply_session_shield_suggestions(
@@ -384,11 +414,11 @@ def process_prepared_batch(session_factory, batch_id: str, registry: ProviderReg
         # persisted payload above is the last chance for Session Shield filtering.
         provider_result = adapter.generate_json(system_prompt=system_prompt, payload=payload)
         parsed = parse_json_object(provider_result.text)
-        results_by_id = (
-            validate_moderation_response(parsed, payload)
-            if pipeline is LivePipeline.MODERATION
-            else validate_reply_finder_response(parsed, payload)
-        )
+        memory_candidates_by_id = {}
+        if pipeline is LivePipeline.MODERATION:
+            results_by_id = validate_moderation_response(parsed, payload)
+        else:
+            results_by_id, memory_candidates_by_id = validate_reply_finder_output(parsed, payload)
         with session_factory() as session:
             completed, missing = complete_live_batch(
                 session,
@@ -406,8 +436,7 @@ def process_prepared_batch(session_factory, batch_id: str, registry: ProviderReg
                     for message in payload.get("messages", [])
                     if isinstance(message, dict) and isinstance(message.get("message_id"), str)
                 }
-                for message_id, result in results_by_id.items():
-                    proposal = result.get("community_memory", {})
+                for message_id, proposal in memory_candidates_by_id.items():
                     source = source_by_id.get(message_id, {})
                     if not proposal.get("save_candidate"):
                         continue

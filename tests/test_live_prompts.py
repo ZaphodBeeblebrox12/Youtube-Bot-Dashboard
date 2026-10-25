@@ -27,4 +27,7 @@ def test_reply_finder_only_proposes_meaningful_private_memory():
     assert "What is a support level?" in REPLY_FINDER_SYSTEM_PROMPT
     assert "confidence >= 0.80" in REPLY_FINDER_SYSTEM_PROMPT
     assert "two owner-saved memories per viewer" in REPLY_FINDER_SYSTEM_PROMPT
-    assert '"community_memory"' in REPLY_FINDER_SYSTEM_PROMPT
+    assert '"memory_candidates"' in REPLY_FINDER_SYSTEM_PROMPT
+    assert "Review ALL supplied messages" in REPLY_FINDER_SYSTEM_PROMPT
+    assert "Do not require a message to be selected" in REPLY_FINDER_SYSTEM_PROMPT
+    assert "Do NOT create a memory just because someone asks a basic definition question" in REPLY_FINDER_SYSTEM_PROMPT
