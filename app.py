@@ -670,7 +670,7 @@ elif page == "Filtered Chat":
                         st.divider()
 
         st.caption(
-            f"Filtered reading feed · {session_label} · community memories and viewer history expire after "
+            f"Filtered reading feed · {session_label} · saved memories and detailed visit records expire after "
             f"{COMMUNITY_RETENTION_DAYS} days."
         )
 
