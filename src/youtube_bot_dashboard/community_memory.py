@@ -171,7 +171,7 @@ def record_viewer_activity(
     if not user_channel_id or not user_channel_id.strip():
         return None
     now = observed_at or utc_now()
-    _ensure_community_retention_cleanup(session, now=now)
+    _ensure_community_retention_cleanup(session)
     profile = session.get(CommunityViewerProfile, user_channel_id)
     if profile is None:
         profile = CommunityViewerProfile(
@@ -309,7 +309,7 @@ def review_memory_suggestion(
     normalized = decision.strip().upper()
     if normalized not in {"SAVE", "DISMISS"}:
         raise ValueError("decision must be SAVE or DISMISS")
-    _ensure_community_retention_cleanup(session, now=reviewed_at)
+    _ensure_community_retention_cleanup(session)
     memory = session.get(CommunityMemory, memory_id)
     if memory is None:
         raise ValueError(f"unknown community memory {memory_id}")
