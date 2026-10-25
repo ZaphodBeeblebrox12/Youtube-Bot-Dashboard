@@ -198,3 +198,17 @@ At a glance, the creator should see the filtered comments, read them, keep their
 
 The user has explicitly said these points are requirements. Future implementation must preserve them and must not silently remove/reinterpret them in the name of simplification. The source of truth is this section together with the matching “Glance-first filtered chat and community recognition” section in docs/PROJECT_DECISIONS.md.
 
+## 10. Three-day community-memory and viewer-history retention (owner decision, 2026-10-25)
+
+The owner explicitly requires that remembered community context be retained for **three days only**, due to storage concerns. Do not lengthen this without approval.
+
+- Suggested and saved community-memory records expire three days after original creation. Owner approval/use does not extend the expiry.
+- Viewer profile/visit history is a rolling three-day window. Profiles inactive beyond three days are removed with visits and associated memory records; active profiles' stream/message counts are based only on visits in-window.
+- The live reading feed and Community Memory workspace must hide expired records immediately by query/filter, even before physical cleanup.
+- Purge should run during normal community activity and on Community Memory workspace access, throttled so the live worker does not scan the complete tables on every incoming message.
+- Returning status means at least two distinct stream sessions within the retained window, matched by stable supplied channel ID. Membership remains a separate, source-confirmed fact.
+- Tests should cover old saved memories, pending suggestions, stale profiles/visits, and active rolling counts.
+- Implemented on feature/persistent-moderation in community_memory.py, tests/test_community_memory.py, and app.py. Verification is pending the current Actions run.
+
+The adjacent glance-first filtered-chat requirements remain in force: the live feed is the default reading surface, raw chat is not mixed into it, and returning-viewer context is shown inline without clutter.
+
