@@ -884,6 +884,72 @@ elif page == "Settings":
             st.error(f"Settings were not saved: {exc}")
 
     st.divider()
+    st.subheader("Provider pricing")
+    st.caption(
+        "Enter the official rates for the exact configured model, in USD per million tokens. "
+        "Use 0 when a token category is free/not billed; cost stays unknown until all four rates are saved. "
+        "Rates are never assumed from a model name."
+    )
+    provider_model_env = {
+        ProviderName.GEMINI: "GEMINI_MODEL",
+        ProviderName.QWEN: "QWEN_MODEL",
+        ProviderName.DEEPSEEK: "DEEPSEEK_MODEL",
+        ProviderName.KIMI: "KIMI_MODEL",
+    }
+    provider_labels = {
+        "input_usd_per_million": "Uncached input · USD / 1M tokens",
+        "cached_input_usd_per_million": "Cache-hit input · USD / 1M tokens",
+        "cache_write_usd_per_million": "Cache-write input · USD / 1M tokens",
+        "output_usd_per_million": "Output · USD / 1M tokens",
+    }
+    for provider in (ProviderName.GEMINI, ProviderName.QWEN, ProviderName.DEEPSEEK, ProviderName.KIMI):
+        configured_model = (
+            provider_registry.get(provider).model_id
+            if provider_registry.has(provider)
+            else os.getenv(provider_model_env[provider])
+        )
+        with st.expander(f"{provider.value.title()} rate card", expanded=False):
+            if not configured_model:
+                st.caption(f"Set {provider_model_env[provider]} in your environment before configuring a model-specific rate card.")
+                continue
+            st.caption(f"Model: {configured_model}")
+            with db_session() as session:
+                current_rates = load_provider_rate_card(session, provider, configured_model)
+            rate_inputs = {}
+            with st.form(f"provider_pricing_{provider.value.lower()}"):
+                rate_columns = st.columns(2)
+                for index, field in enumerate(PRICE_FIELDS):
+                    current_value = "" if current_rates is None else format(getattr(current_rates, field), ".10g")
+                    with rate_columns[index % 2]:
+                        rate_inputs[field] = st.text_input(
+                            provider_labels[field],
+                            value=current_value,
+                            key=f"provider_rate_{provider.value.lower()}_{field}_{configured_model}",
+                            help="Rates apply only to the model shown above. Leave 0 only if that category is genuinely free/not billed.",
+                        )
+                save_rates = st.form_submit_button("Save rate card", type="primary")
+                clear_rates = st.form_submit_button("Clear rate card")
+            if clear_rates:
+                with db_session() as session:
+                    save_provider_rate_card(session, provider, configured_model, None)
+                    session.commit()
+                st.success(f"{provider.value.title()} model pricing cleared; cost will show as not configured.")
+                st.rerun()
+            if save_rates:
+                try:
+                    if any(not value.strip() for value in rate_inputs.values()):
+                        raise ValueError("Enter all four rates. Use 0 for a category that is not billed.")
+                    rates = ProviderRateCard(**{
+                        field: float(value.strip()) for field, value in rate_inputs.items()
+                    })
+                    with db_session() as session:
+                        save_provider_rate_card(session, provider, configured_model, rates)
+                        session.commit()
+                    st.success(f"Saved pricing for {provider.value.title()} · {configured_model}.")
+                except (ValueError, TypeError) as exc:
+                    st.error(f"Pricing was not saved: {exc}")
+
+    st.divider()
     st.subheader("Live-message text retention")
     st.caption(
         "This controls raw chat-message content only. It does not delete AI task results, "
