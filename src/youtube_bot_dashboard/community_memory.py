@@ -6,6 +6,7 @@ Short suggestions await owner review; only approved memories become saved viewer
 from __future__ import annotations
 
 from datetime import datetime, timedelta
+from threading import Lock
 from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, select, func, delete
 from sqlalchemy.orm import Mapped, Session, mapped_column
 
@@ -17,6 +18,8 @@ MIN_MEMORY_CONFIDENCE = 0.80
 MAX_SAVED_MEMORIES_PER_VIEWER = 2
 COMMUNITY_RETENTION_DAYS = 3
 CLEANUP_INTERVAL = timedelta(hours=1)
+_RETENTION_CLEANUP_LOCK = Lock()
+_LAST_RETENTION_CLEANUP_AT: datetime | None = None
 
 
 class CommunityViewerProfile(Base):
@@ -150,12 +153,15 @@ def _ensure_community_retention_cleanup(
     *,
     now: datetime | None = None,
 ) -> None:
-    """Throttle cleanup to at most once per hour per active SQLAlchemy session."""
+    """Throttle full-table cleanup to once per hour per application process."""
+    global _LAST_RETENTION_CLEANUP_AT
     current_time = now or utc_now()
-    previous = session.info.get("_community_retention_cleanup_at")
-    if previous is None or current_time - previous >= CLEANUP_INTERVAL:
+    with _RETENTION_CLEANUP_LOCK:
+        previous = _LAST_RETENTION_CLEANUP_AT
+        if previous is not None and current_time - previous < CLEANUP_INTERVAL:
+            return
         purge_expired_community_data(session, now=current_time)
-        session.info["_community_retention_cleanup_at"] = current_time
+        _LAST_RETENTION_CLEANUP_AT = current_time
 
 
 def record_viewer_activity(
@@ -173,6 +179,23 @@ def record_viewer_activity(
     now = observed_at or utc_now()
     _ensure_community_retention_cleanup(session)
     profile = session.get(CommunityViewerProfile, user_channel_id)
+    retention_cutoff = utc_now() - timedelta(days=COMMUNITY_RETENTION_DAYS)
+    if profile is not None and profile.last_seen_at < retention_cutoff:
+        # If an inactive viewer returns between scheduled purges, remove their
+        # expired continuity data now instead of reviving out-of-window history.
+        session.execute(
+            delete(CommunityMemory).where(
+                CommunityMemory.user_channel_id == user_channel_id
+            )
+        )
+        session.execute(
+            delete(CommunityViewerVisit).where(
+                CommunityViewerVisit.user_channel_id == user_channel_id
+            )
+        )
+        session.delete(profile)
+        session.flush()
+        profile = None
     if profile is None:
         profile = CommunityViewerProfile(
             user_channel_id=user_channel_id,
@@ -267,6 +290,15 @@ def create_memory_suggestion(
     profile = session.get(CommunityViewerProfile, user_channel_id)
     if profile is None:
         return None
+    # Expire this viewer's stale memories even when the hourly global cleanup
+    # was recently run in another request/session.
+    session.execute(
+        delete(CommunityMemory).where(
+            CommunityMemory.user_channel_id == user_channel_id,
+            CommunityMemory.created_at < utc_now() - timedelta(days=COMMUNITY_RETENTION_DAYS),
+        )
+    )
+    session.flush()
     existing_suggestion = session.scalar(select(CommunityMemory.id).where(
         CommunityMemory.user_channel_id == user_channel_id,
         CommunityMemory.status == "SUGGESTED",
