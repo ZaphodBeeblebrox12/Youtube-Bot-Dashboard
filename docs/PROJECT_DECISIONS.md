@@ -863,3 +863,6 @@ Implement working behavior in the real application (`app.py`), not by editing th
 
 The binding instructions and file provenance are recorded in `docs/DASHBOARD_TEMPLATE_STANDARD.md`. The exact canonical HTML was copied into the repository without design edits.
 
+## Scrollable reply text — approved behavior refinement (2026-10-25)
+
+The user requested that long suggested replies scroll within a bounded text area instead of increasing the page height. Implement this in both the canonical HTML reference (`docs/reference/approved-dashboard-template.html`) and the actual Streamlit UI (`app.py`). Keep the existing layout, cards, styling, and page hierarchy unchanged. This is an approved behavior change, not approval for a broader redesign.

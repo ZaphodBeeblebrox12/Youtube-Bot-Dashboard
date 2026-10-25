@@ -8,7 +8,7 @@
 
 ## Binding decision
 
-The user-designated HTML above is the canonical visual reference for the YouTube Bot Dashboard. Preserve that template as-is. This is a locked design baseline, not a suggestion to recreate or reinterpret.
+The user-designated HTML above is the canonical visual reference for the YouTube Bot Dashboard. Preserve its approved visual layout and styling as-is. This is a locked design baseline, not a suggestion to recreate or reinterpret. Nonvisual behavior can be added when explicitly requested, provided the approved layout and appearance are preserved.
 
 Future functionality and behavior may be added, connected to live data, or improved, but the implementation must continue to follow the canonical template's existing visual structure. Keep its current page hierarchy, top metrics, navigation, main feed/detail layout, lower summary panels, typography, palette, spacing, card styling, labels and responsive behavior unchanged unless the user explicitly approves a design change.
 
@@ -22,6 +22,10 @@ Implement application behavior in the actual runtime (currently `app.py`) rather
 - Preserve all existing workspace and action semantics unless a requirement change is explicitly approved.
 - This HTML file is the design reference, not the deployed Streamlit application or a second runtime.
 
+## Approved behavior addition — scrollable reply text (2026-10-25)
+
+Long suggested replies in message cards and selected-message details must be constrained to a bounded height and scroll vertically inside the reply text area. Scrolling must not cause the surrounding page or card to grow with the response length. This is a behavior-only refinement: do not change the card layout, typography, colors, spacing, or other visual styling. The running app (`app.py`) and canonical HTML reference both implement this behavior.
+
 ## Change control
 
-Any change to the canonical template or its visual design requires explicit user approval. Feature additions are welcome only when they preserve the locked visual baseline. Keep this standard and the canonical HTML in `main` so future work can recover this decision without relying on chat history.
+Any visual redesign or structural change to the canonical template requires explicit user approval. Feature additions and behavior changes are welcome only when they preserve the locked visual baseline, except where the user explicitly approves a visual/structural change. Keep this standard and the canonical HTML in `main` so future work can recover this decision without relying on chat history.

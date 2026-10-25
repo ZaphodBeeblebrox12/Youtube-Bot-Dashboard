@@ -424,6 +424,7 @@ st.markdown(
       .tt-red {background: #ffe4e4; color: #aa2424;}
       .tt-amber {background: #fff1cb; color: #905200;}
       .tt-chat-copy {font-size: .98rem; line-height: 1.45; color: #17253e;}
+      .tt-response-scroll {max-height: 5.75rem; overflow-y: auto; overscroll-behavior: contain; padding-right: .35rem; scrollbar-width: thin; white-space: normal;}
       .tt-initials {display:inline-grid;place-items:center;overflow:hidden;border-radius:50%;vertical-align:middle;flex:none;background:#dce6f6;color:#315486;font-weight:800;font-size:.82rem;}
       .tt-author-row {display:flex;align-items:center;gap:.55rem;min-width:0;margin-bottom:.45rem;}
       .tt-author-row > span:last-child {min-width:0;}
@@ -624,7 +625,7 @@ if page == "Dashboard":
                             st.warning("The AI hint needs review before use.")
                         st.markdown("**Suggested response · exactly 2 sentences**")
                         if item["answer"]:
-                            st.write(item["answer"])
+                            st.markdown(f'<div class="tt-response-scroll">{escape(str(item["answer"]))}</div>', unsafe_allow_html=True)
                             action_cols = st.columns([1.05, 1.0], gap="small")
                             with action_cols[0]:
                                 if st.button("Use as reply", key=f"dashboard-use-reply-{item['message_id']}"):
@@ -691,7 +692,8 @@ if page == "Dashboard":
                     st.markdown("**AI hint**")
                     st.write(lead["ai_hint"] or "Hint needs review.")
                     st.markdown("**Suggested response (2 sentences)**")
-                    st.write(lead["answer"] or "No response returned.")
+                    lead_answer_text = lead["answer"] or "No response returned."
+                st.markdown(f'<div class="tt-response-scroll">{escape(str(lead_answer_text))}</div>', unsafe_allow_html=True)
                     if lead["approved"] and lead["answer"]:
                         action_cols = st.columns([1.05, 1.0], gap="small")
                         with action_cols[0]:
