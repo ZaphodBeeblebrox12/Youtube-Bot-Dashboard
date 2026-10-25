@@ -174,7 +174,7 @@ def cleanup_expired_live_message_content(
         update(LiveMessageRecord)
         .where(*expired_filter)
         .values(text=LIVE_MESSAGE_TEXT_EXPIRED)
-        .execution_options(synchronize_session=False)
+        .execution_options(synchronize_session="fetch")
     )
     result["expired_messages"] = max(0, updated.rowcount or 0)
 
@@ -195,7 +195,7 @@ def cleanup_expired_live_message_content(
             next_attempt_at=None,
             last_error="Message content expired under the configured live-message retention policy.",
         )
-        .execution_options(synchronize_session=False)
+        .execution_options(synchronize_session="fetch")
     )
     result["excluded_tasks"] = max(0, tasks_updated.rowcount or 0)
     session.flush()
