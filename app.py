@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import os
 from contextlib import contextmanager
+from html import escape
 
 import streamlit as st
 from dotenv import load_dotenv
@@ -427,14 +428,17 @@ if page == "Dashboard":
                                 member_labels.append("MEMBER")
                             if profile_row and profile_row.distinct_sessions_seen >= 2:
                                 member_labels.append("RETURNING")
+                    safe_username = escape(str(item["username"]))
+                    safe_time_label = escape(str(item["time_label"]))
                     tag_html = ""
                     if item["is_super_chat"]:
-                        tag_html += '<span class="tt-tag tt-red">SUPER CHAT · ' + str(item["super_chat_amount"]) + '</span>'
+                        safe_amount = escape(str(item["super_chat_amount"]))
+                        tag_html += '<span class="tt-tag tt-red">SUPER CHAT · ' + safe_amount + '</span>'
                     if "MEMBER" in member_labels:
                         tag_html += '<span class="tt-tag tt-green">MEMBER</span>'
                     if "RETURNING" in member_labels:
                         tag_html += '<span class="tt-tag tt-purple">RETURNING</span>'
-                    st.markdown(f"**{item['username']}**  <span class='tt-muted'>{item['time_label']}</span> {tag_html}", unsafe_allow_html=True)
+                    st.markdown(f"**{safe_username}**  <span class='tt-muted'>{safe_time_label}</span> {tag_html}", unsafe_allow_html=True)
                     st.write(item["text"])
                     st.caption(
                         f"{item['question_type'].replace('_', ' ').title()} · "
