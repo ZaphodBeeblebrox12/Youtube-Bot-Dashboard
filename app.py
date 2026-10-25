@@ -1677,8 +1677,8 @@ elif page == "Analytics":
         })
     st.dataframe(summary_rows, hide_index=True, use_container_width=True)
     st.caption(
-        "Latency is measured from dispatch to response. Cache metrics are shown only when the provider reports them. "
-        "Costs use the saved model-specific USD rate card; input without cache-read detail is priced as uncached, and premium cache-write pricing requires reported write-token usage."
+        "Latency is measured from dispatch to response. Cache-hit rate uses only requests reporting both cache-hit and total-input tokens; incomplete cache telemetry is excluded. "
+        "Gemini output-token totals include thinking tokens when reported. Costs use saved model-specific USD rate cards; input without cache-read detail is priced as uncached, and premium cache-write pricing requires reported write-token usage."
     )
 
     if provider_report["by_pipeline"]:

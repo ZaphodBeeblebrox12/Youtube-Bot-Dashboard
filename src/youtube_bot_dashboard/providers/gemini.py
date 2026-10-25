@@ -44,10 +44,17 @@ class GeminiProvider:
         if not isinstance(text, str) or not text.strip():
             raise ProviderError("Gemini returned an empty response.")
         usage = getattr(response, "usage_metadata", None)
+        candidate_tokens = getattr(usage, "candidates_token_count", None) if usage else None
+        thought_tokens = getattr(usage, "thoughts_token_count", None) if usage else None
+        # Gemini bills thinking tokens at the output-token rate for thinking models.
+        # Keep output usage unknown if the candidate-token count itself is missing.
+        billable_output_tokens = (
+            None if candidate_tokens is None else candidate_tokens + (thought_tokens or 0)
+        )
         return ProviderResponse(
             text=text,
             model_id=self.model_id,
             input_tokens=getattr(usage, "prompt_token_count", None) if usage else None,
-            output_tokens=getattr(usage, "candidates_token_count", None) if usage else None,
+            output_tokens=billable_output_tokens,
             cached_input_tokens=getattr(usage, "cached_content_token_count", None) if usage else None,
         )

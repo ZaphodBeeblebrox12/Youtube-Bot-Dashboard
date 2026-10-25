@@ -1,10 +1,12 @@
-from types import SimpleNamespace
+import sys
+from types import ModuleType, SimpleNamespace
 
 import pytest
 
 from youtube_bot_dashboard.live_queue import ProviderName
 from youtube_bot_dashboard.providers.base import ProviderError
 from youtube_bot_dashboard.providers.deepseek import DeepSeekProvider
+from youtube_bot_dashboard.providers.gemini import GeminiProvider
 from youtube_bot_dashboard.providers.kimi import KimiProvider
 from youtube_bot_dashboard.providers.registry import ProviderRegistry
 
@@ -97,3 +99,33 @@ def test_deepseek_requires_key_and_model(monkeypatch):
     with pytest.raises(ProviderError):
         DeepSeekProvider()
 
+
+
+
+def test_gemini_adapter_includes_reported_thinking_tokens_in_billable_output(monkeypatch):
+    google_module = ModuleType("google")
+    genai_module = ModuleType("google.genai")
+    genai_module.types = SimpleNamespace(
+        GenerateContentConfig=lambda **kwargs: kwargs
+    )
+    google_module.genai = genai_module
+    monkeypatch.setitem(sys.modules, "google", google_module)
+    monkeypatch.setitem(sys.modules, "google.genai", genai_module)
+
+    usage = SimpleNamespace(
+        prompt_token_count=100,
+        candidates_token_count=35,
+        thoughts_token_count=20,
+        cached_content_token_count=10,
+    )
+    response = SimpleNamespace(text='{"results": []}', usage_metadata=usage)
+    client = SimpleNamespace(
+        models=SimpleNamespace(generate_content=lambda **kwargs: response)
+    )
+    provider = GeminiProvider(api_key="test-key", model_id="gemini-thinking-test", client=client)
+
+    result = provider.generate_json(system_prompt="Test instruction", payload={})
+
+    assert result.input_tokens == 100
+    assert result.output_tokens == 55
+    assert result.cached_input_tokens == 10

@@ -1,7 +1,9 @@
 from datetime import datetime, timedelta, timezone
+import os
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import inspect, select
+from sqlalchemy.schema import CreateTable
 
 from youtube_bot_dashboard.policies.comment_cleanup import (
     CommentAssessment,
@@ -10,6 +12,7 @@ from youtube_bot_dashboard.policies.comment_cleanup import (
     Sentiment,
     decide_cleanup,
 )
+from youtube_bot_dashboard.live_queue import LiveAIRequestBatch
 from youtube_bot_dashboard.storage import (
     CommentRecord,
     CommentTextVersion,
@@ -175,3 +178,50 @@ def test_records_persist_after_engine_restart(tmp_path):
         assert record is not None
         assert record.text == "Still here"
     engine2.dispose()
+
+
+
+def _assert_cache_write_column_migration(engine):
+    columns_before = {column["name"] for column in inspect(engine).get_columns("live_ai_request_batches")}
+    if "cache_write_tokens" in columns_before:
+        with engine.begin() as connection:
+            connection.exec_driver_sql(
+                "ALTER TABLE live_ai_request_batches DROP COLUMN cache_write_tokens"
+            )
+    columns_without = {column["name"] for column in inspect(engine).get_columns("live_ai_request_batches")}
+    assert "cache_write_tokens" not in columns_without
+
+    create_schema(engine)
+
+    columns_after = {column["name"] for column in inspect(engine).get_columns("live_ai_request_batches")}
+    assert "cache_write_tokens" in columns_after
+
+
+def test_create_schema_migrates_existing_sqlite_batch_table(tmp_path):
+    engine, _ = create_engine_and_sessions(f"sqlite:///{tmp_path / 'legacy.sqlite3'}")
+    try:
+        # Start with the current table shape minus the new additive telemetry column.
+        ddl = str(CreateTable(LiveAIRequestBatch.__table__).compile(engine))
+        legacy_ddl = "\n".join(
+            line for line in ddl.splitlines() if "cache_write_tokens" not in line
+        )
+        with engine.begin() as connection:
+            connection.exec_driver_sql(legacy_ddl)
+
+        create_schema(engine)
+        columns = {column["name"] for column in inspect(engine).get_columns("live_ai_request_batches")}
+        assert "cache_write_tokens" in columns
+    finally:
+        engine.dispose()
+
+
+def test_create_schema_migrates_existing_postgres_batch_table_when_configured():
+    database_url = os.getenv("POSTGRES_TEST_URL")
+    if not database_url:
+        pytest.skip("POSTGRES_TEST_URL is only set for the dedicated CI PostgreSQL service.")
+    engine, _ = create_engine_and_sessions(database_url)
+    try:
+        create_schema(engine)
+        _assert_cache_write_column_migration(engine)
+    finally:
+        engine.dispose()

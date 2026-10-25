@@ -108,3 +108,67 @@ def test_analytics_summarizes_latency_cache_tokens_and_cost(db):
     assert kimi["cache_hit_rate_percent"] == pytest.approx(40.0)
     assert kimi["cost_estimate_usd"] == pytest.approx(0.00148)
     assert detail["pipeline"] == "MODERATION"
+
+
+
+def test_cache_hit_rate_excludes_records_missing_total_input_usage(db):
+    _, factory = db
+    start = datetime(2026, 1, 2, tzinfo=timezone.utc)
+    with factory() as session:
+        register_live_session(session, session_id="session-cache-coverage")
+        session.add_all([
+            LiveAIRequestBatch(
+                batch_id="batch-cache-unknown-input",
+                session_id="session-cache-coverage",
+                pipeline="MODERATION",
+                provider="KIMI",
+                model_id="kimi-test",
+                payload_json="{}",
+                status="COMPLETED",
+                input_tokens=None,
+                output_tokens=10,
+                cached_input_tokens=50,
+                sent_at=start,
+                completed_at=start + timedelta(seconds=1),
+                created_at=start,
+            ),
+            LiveAIRequestBatch(
+                batch_id="batch-cache-known-input",
+                session_id="session-cache-coverage",
+                pipeline="MODERATION",
+                provider="KIMI",
+                model_id="kimi-test",
+                payload_json="{}",
+                status="COMPLETED",
+                input_tokens=100,
+                output_tokens=10,
+                cached_input_tokens=20,
+                sent_at=start + timedelta(seconds=2),
+                completed_at=start + timedelta(seconds=3),
+                created_at=start + timedelta(seconds=2),
+            ),
+        ])
+        session.commit()
+
+    with factory() as session:
+        report = get_provider_analytics(session)
+        kimi = next(row for row in report["providers"] if row["provider"] == "KIMI")
+
+    # Recorded cache-hit tokens remain visible, but only the second request
+    # has a complete denominator for computing the cache-hit percentage.
+    assert kimi["cached_input_tokens"] == 70
+    assert kimi["cache_hit_rate_percent"] == pytest.approx(20.0)
+
+
+def test_provider_rate_card_can_be_cleared(db):
+    _, factory = db
+    rate_card = ProviderRateCard(1.0, 0.1, 0.2, 2.0)
+    with factory() as session:
+        save_provider_rate_card(session, "DEEPSEEK", "deepseek-test", rate_card)
+        session.commit()
+    with factory() as session:
+        assert load_provider_rate_card(session, "DEEPSEEK", "deepseek-test") == rate_card
+        save_provider_rate_card(session, "DEEPSEEK", "deepseek-test", None)
+        session.commit()
+    with factory() as session:
+        assert load_provider_rate_card(session, "DEEPSEEK", "deepseek-test") is None
