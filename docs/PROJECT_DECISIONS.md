@@ -865,3 +865,12 @@ This section captures an explicit owner requirement. Do not remove or reinterpre
 
 Implementation checkpoint: community_memory.py exposes purge_expired_community_data, expires saved and pending memories, prunes profiles inactive for three days, trims visit rows, and recomputes active profile counters from the rolling window. The Streamlit live feed filters expired memory/profile data and states the three-day limit. Unit tests cover expiration and rolling history. CI must be checked after the branch's latest commit.
 
+### Latest implementation and verification status (2026-10-25)
+
+- The default sidebar workspace is now **Filtered Chat**. It refreshes the filtered view every three seconds, shows approved/selected comments only, renders oldest-to-newest within the newest 250-comment window, and uses a fixed-height Streamlit container with sticky autoscroll support.
+- A compact **Jump to latest · N new** control appears when newly selected message IDs arrive since the prior feed refresh. Activating it resets the scroll container to its latest position. The incoming-message count is a lightweight UI approximation; it is not a source chat unread/read receipt.
+- The scroll container uses Streamlit's autoscroll feature, so the app dependency floor has been raised to Streamlit 1.66.0.
+- Community retention is three days: stored suggestions/saved memories expire three days after creation, and viewer visit/profile history is a rolling three-day activity window. Full-table expiry cleanup is throttled to once per process per hour; if a specific viewer returns after their history has expired, that viewer's stale visits and memories are removed and their recent history starts fresh.
+- Tests added/updated cover three-day memory expiry, inactive profile/visit expiry, rolling visit counts, and resetting a viewer's history after returning outside the window. The stale-time Shield batch test now uses the actual current UTC clock instead of hard-coded midnight.
+- **CI is not verified for the latest branch head.** The last available run [40169805354](https://github.com/ZaphodBeeblebrox12/Youtube-Bot-Dashboard/actions/runs/40169805354) failed at the old test test_shielding_after_ingest_scrubs_prepared_batches_for_both_ai_pipelines because its simulated timestamp was behind the live enqueue timestamp (114 passed, 1 failed). The test was patched, but GitHub Actions has not reported a subsequent run against the current branch head. Do not describe these changes as fully tested until the current suite runs.
+
