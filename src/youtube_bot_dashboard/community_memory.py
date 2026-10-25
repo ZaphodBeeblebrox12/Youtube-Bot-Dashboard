@@ -5,8 +5,8 @@ Short suggestions await owner review; only approved memories become saved viewer
 """
 from __future__ import annotations
 
-from datetime import datetime
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, select, func
+from datetime import datetime, timedelta
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, select, func, delete
 from sqlalchemy.orm import Mapped, Session, mapped_column
 
 from youtube_bot_dashboard.storage import Base, utc_now
@@ -15,6 +15,8 @@ MEMORY_TYPES = {"CHALLENGE", "GOAL", "PROGRESS", "PREFERENCE", "MILESTONE", "INS
 MEMORY_STATUSES = {"SUGGESTED", "SAVED", "DISMISSED"}
 MIN_MEMORY_CONFIDENCE = 0.80
 MAX_SAVED_MEMORIES_PER_VIEWER = 2
+COMMUNITY_RETENTION_DAYS = 3
+CLEANUP_INTERVAL = timedelta(hours=1)
 
 
 class CommunityViewerProfile(Base):
@@ -69,6 +71,93 @@ class CommunityMemory(Base):
     last_used_session_id: Mapped[str | None] = mapped_column(String(120), nullable=True)
 
 
+
+def purge_expired_community_data(
+    session: Session,
+    *,
+    now: datetime | None = None,
+) -> dict[str, int]:
+    """Delete community memories and viewer history older than the 3-day window.
+
+    Memory suggestions and saved memories expire three days after creation.
+    Viewer profiles/visit rows expire after three days without activity. For
+    active profiles, visit counters are recomputed only from visits in-window.
+    """
+    current_time = now or utc_now()
+    cutoff = current_time - timedelta(days=COMMUNITY_RETENTION_DAYS)
+
+    expired_memories = session.execute(
+        delete(CommunityMemory).where(CommunityMemory.created_at < cutoff)
+    ).rowcount or 0
+
+    stale_profile_ids = list(session.scalars(
+        select(CommunityViewerProfile.user_channel_id).where(
+            CommunityViewerProfile.last_seen_at < cutoff
+        )
+    ))
+    if stale_profile_ids:
+        session.execute(
+            delete(CommunityMemory).where(
+                CommunityMemory.user_channel_id.in_(stale_profile_ids)
+            )
+        )
+        session.execute(
+            delete(CommunityViewerVisit).where(
+                CommunityViewerVisit.user_channel_id.in_(stale_profile_ids)
+            )
+        )
+
+    expired_visits = session.execute(
+        delete(CommunityViewerVisit).where(CommunityViewerVisit.last_seen_at < cutoff)
+    ).rowcount or 0
+    expired_profiles = session.execute(
+        delete(CommunityViewerProfile).where(CommunityViewerProfile.last_seen_at < cutoff)
+    ).rowcount or 0
+
+    profiles = list(session.scalars(
+        select(CommunityViewerProfile).where(CommunityViewerProfile.last_seen_at >= cutoff)
+    ))
+    for profile in profiles:
+        recent_visits = list(session.scalars(
+            select(CommunityViewerVisit)
+            .where(
+                CommunityViewerVisit.user_channel_id == profile.user_channel_id,
+                CommunityViewerVisit.last_seen_at >= cutoff,
+            )
+            .order_by(CommunityViewerVisit.first_seen_at.asc())
+        ))
+        if recent_visits:
+            profile.first_seen_at = recent_visits[0].first_seen_at
+            profile.first_seen_session_id = recent_visits[0].session_id
+            profile.distinct_sessions_seen = len(recent_visits)
+            profile.total_message_count = sum(visit.message_count for visit in recent_visits)
+        else:
+            # A recently active profile should normally have a visit row. Keep
+            # the aggregate conservative if older data is inconsistent.
+            profile.distinct_sessions_seen = 1
+            profile.total_message_count = 1
+
+    session.flush()
+    return {
+        "expired_memories": int(expired_memories),
+        "expired_visits": int(expired_visits),
+        "expired_profiles": int(expired_profiles),
+    }
+
+
+def _ensure_community_retention_cleanup(
+    session: Session,
+    *,
+    now: datetime | None = None,
+) -> None:
+    """Throttle cleanup to at most once per hour per active SQLAlchemy session."""
+    current_time = now or utc_now()
+    previous = session.info.get("_community_retention_cleanup_at")
+    if previous is None or current_time - previous >= CLEANUP_INTERVAL:
+        purge_expired_community_data(session, now=current_time)
+        session.info["_community_retention_cleanup_at"] = current_time
+
+
 def record_viewer_activity(
     session: Session,
     *,
@@ -82,6 +171,7 @@ def record_viewer_activity(
     if not user_channel_id or not user_channel_id.strip():
         return None
     now = observed_at or utc_now()
+    _ensure_community_retention_cleanup(session, now=now)
     profile = session.get(CommunityViewerProfile, user_channel_id)
     if profile is None:
         profile = CommunityViewerProfile(
@@ -148,6 +238,7 @@ def create_memory_suggestion(
     """Queue at most one pending suggestion per person; never auto-save it."""
     if not user_channel_id or not user_channel_id.strip():
         return None
+    _ensure_community_retention_cleanup(session)
     if memory_type not in MEMORY_TYPES:
         return None
     if not isinstance(confidence, (int, float)) or isinstance(confidence, bool):
@@ -218,6 +309,7 @@ def review_memory_suggestion(
     normalized = decision.strip().upper()
     if normalized not in {"SAVE", "DISMISS"}:
         raise ValueError("decision must be SAVE or DISMISS")
+    _ensure_community_retention_cleanup(session, now=reviewed_at)
     memory = session.get(CommunityMemory, memory_id)
     if memory is None:
         raise ValueError(f"unknown community memory {memory_id}")
@@ -239,6 +331,7 @@ def review_memory_suggestion(
 
 
 def forget_saved_memory(session: Session, *, memory_id: int) -> bool:
+    _ensure_community_retention_cleanup(session)
     memory = session.get(CommunityMemory, memory_id)
     if memory is None or memory.status != "SAVED":
         return False
