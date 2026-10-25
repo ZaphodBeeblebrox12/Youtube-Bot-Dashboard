@@ -19,6 +19,7 @@ from sqlalchemy import select
 from dotenv import load_dotenv
 
 from youtube_bot_dashboard.community_memory import MEMORY_TYPES, create_memory_suggestion
+from youtube_bot_dashboard.persistent_moderation import record_moderation_results
 from youtube_bot_dashboard.live_queue import (
     AppSettingRecord,
     BatchState,
@@ -399,6 +400,13 @@ def process_prepared_batch(session_factory, batch_id: str, registry: ProviderReg
                 output_tokens=provider_result.output_tokens,
                 cached_input_tokens=provider_result.cached_input_tokens,
             )
+            incident_ids = []
+            if pipeline is LivePipeline.MODERATION:
+                incident_ids = record_moderation_results(
+                    session, batch_id=batch_id, session_id=session_id, payload=payload,
+                    results_by_message_id=results_by_id, provider=provider_name.value,
+                    model_id=adapter.model_id,
+                )
             memory_suggestions = []
             if pipeline is LivePipeline.REPLY_FINDER:
                 source_by_id = {
@@ -441,6 +449,7 @@ def process_prepared_batch(session_factory, batch_id: str, registry: ProviderReg
             "completed_messages": completed,
             "retryable_messages": missing,
             "session_shield_users_added": shielded_users if pipeline is LivePipeline.MODERATION else [],
+            "moderation_incident_ids": incident_ids if pipeline is LivePipeline.MODERATION else [],
             "community_memory_suggestion_ids": memory_suggestions if pipeline is LivePipeline.REPLY_FINDER else [],
             "input_tokens": provider_result.input_tokens,
             "output_tokens": provider_result.output_tokens,

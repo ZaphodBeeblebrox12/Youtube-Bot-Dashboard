@@ -2,7 +2,7 @@
 
 **Updated:** 2026-10-25  
 **Repository:** https://github.com/ZaphodBeeblebrox12/Youtube-Bot-Dashboard  
-**Working branch:** `main`  
+**Working branch:** `feature/persistent-moderation` (do not merge into `main` without explicit approval)  
 **Code checkpoint before this handoff document:** `4026f55eec93b8492f024510cad21774093b17e7`  
 **Last verified CI at that code checkpoint:** [Run 40130179648](https://github.com/ZaphodBeeblebrox12/Youtube-Bot-Dashboard/actions/runs/40130179648) — **100 passed in 3.28s**  
 **Purpose of next chat:** Continue the existing design; do not ask the user to re-explain decisions already captured in notes.
@@ -17,12 +17,7 @@ The current implementation only has **session-scoped Session Shield**. Do not mi
 
 ## 2. Settled moderation policy from the project notes
 
-The notes specify the following escalation policy for confirmed qualifying offences by the **same reliably identified YouTube account**:
-
-1. First offence: restrict until the current chat/session ends.
-2. Second offence: 7-day ban.
-3. Third offence: 30-day ban.
-4. Fourth offence: permanent ban.
+The authoritative policy is the more detailed PROJECT_DECISIONS.md; the four-step first/7-day/30-day/permanent ladder is an inconsistent draft and is not implemented. Current saved rule: the first formal enforcement action is eligible only after three confirmed session strikes across three distinct live sessions for the same stable YouTube channel ID. The first action is intended to be temporary/session-scoped, pending verification of exact YouTube API duration semantics. Later escalation durations and counts remain unfinalized. Until the owner approves the future rulebook, confirmed incidents remain a review/audit workflow and enforcement stays disabled.
 
 Policy is enforced by the backend, **not by the AI model**. AI produces a structured classification/recommendation; backend validation, confirmed incident history, deduplication, strike counting, and sanction decisions are separate steps.
 
@@ -35,7 +30,7 @@ Other settled rules:
 - Cross-account ban evasion is out of scope without reliable linking evidence. Similar names, avatars, wording, or writing style alone do not establish identity.
 - Start in dry-run mode; do not enable live automated enforcement until representative false-positive/false-negative tests and enforcement semantics are reviewed.
 
-The notes say an active restriction/ban must be represented in the user's record and active sanctions. The user's latest clarification requires the pre-AI gate to respect that active state across future messages/streams. A new stream must not silently erase an unexpired timed ban or permanent sanction. First-offence current-session restriction and the timed/permanent sanctions above must retain their distinct expiration semantics.
+A moderator-applied persistent internal restriction is now represented separately from Session Shield and remains effective across new sessions until expiry or explicit revocation. The pre-AI gate must honor active internal restrictions. Actual YouTube sanctions and the unfinalized post-first-ban ladder are not implemented and must not be implied by the internal restriction feature.
 
 ## 3. Current implementation checkpoint
 
@@ -71,11 +66,11 @@ The notes say an active restriction/ban must be represented in the user's record
 
 At code checkpoint `4026f55eec93b8492f024510cad21774093b17e7`, GitHub Actions test run `40130179648` passed with **100 tests**. These are unit/integration tests, including faked YouTube source objects—not a live-broadcast test.
 
-## 4. Important gap: persistent strikes, sanctions, blacklist and enforcement
+## 4. Implementation status after the persistent moderation foundation
 
-Before declaring moderation complete, inspect the current source again. At the checkpoint above, there is a `SessionShieldRecord`, but no complete persistent offence/strike/sanction domain model and policy engine implementing the agreed escalation ladder. The current repository also does not yet carry out the full authorized YouTube enforcement workflow.
+The feature branch adds durable moderation incident candidates, confirmed session-strike records, reviewer decisions, appeal/reversal records, moderation audit events, and timed/permanent internal AI restrictions. Active internal restrictions are checked before AI processing at ingestion and batch preparation. The dashboard exposes review, override, appeal, restriction and audit controls.
 
-Do not claim the ban/mute system is finished just because the Shield tests pass.
+Still not implemented: YouTube ban/timeout enforcement, the finalized post-first-ban escalation ladder, owner-controlled activation of live enforcement, live-broadcast/OAuth verification, multi-worker locking, and a production migration runner. Do not describe internal restrictions as YouTube bans.
 
 ## 5. Required implementation plan for the next chat
 
@@ -161,3 +156,45 @@ Run focused tests first, then full CI. Test against the fake YouTube service; re
 - AI whitelist display policy: https://github.com/ZaphodBeeblebrox12/Youtube-Bot-Dashboard/blob/main/src/youtube_bot_dashboard/chat_visibility.py
 - Live Chat / Reply Queue UI: https://github.com/ZaphodBeeblebrox12/Youtube-Bot-Dashboard/blob/main/app.py
 - Last green test run at code checkpoint: https://github.com/ZaphodBeeblebrox12/Youtube-Bot-Dashboard/actions/runs/40130179648
+
+
+## 8. Persistent moderation implementation update (feature branch)
+
+- Validated violation classifications create pending incident candidates; a moderator must explicitly confirm one before it counts as a session strike.
+- A confirmed qualifying offence can add at most one strike per stable channel ID per live session. The saved three-distinct-session threshold is used only for enforcement review; no enforcement API is called.
+- Persistent internal restrictions can be timed or permanent, apply across sessions, and exclude messages before both AI pipelines. They are distinct from Session Shield and do not prevent public YouTube chat participation.
+- The dashboard has review, dismissal, override/overturn, appeal, strike-correction and audit controls.
+- Policy authority: PROJECT_DECISIONS.md. The proposed 7-day/30-day/permanent escalation remains unresolved; do not activate automatic enforcement until the owner approves the final rulebook.
+- Test and CI status must be updated after the branch workflow completes.
+
+## 9. Non-negotiable live UX purpose — filtered chat and community recognition (2026-10-25)
+
+The owner clarified the product's primary motivation: raw YouTube comments can be hurtful and demoralizing. This dashboard is being built so the creator can replace the raw YouTube chat view with a safer, curated feed of comments worth reading while livestreaming. It should also help returning viewers feel recognized and remembered, so the channel feels like a real community. Treat this as a core product requirement, not a design preference.
+
+### Default live experience
+- The default live screen is **Filtered Chat**, not a KPI overview, raw chat log, or moderation workbench.
+- The centre of attention is the actual filtered comments that the creator can read quickly while speaking. Keep controls, metrics and status text secondary.
+- Show only messages that pass the configured safety/display filters and the Reply Finder selection requirement. Do not mix raw or held-back comments into the ordinary reading feed. Any raw/audit view must be separately and deliberately opened.
+- Do **not** put a repetitive “cleared/safe/approved” label on every filtered comment. Being in this feed already means it passed the configured filters. Show only labels that add meaning, such as a source-confirmed Super Chat or verified membership.
+- Do not draw constant attention to the amount or content of rejected/hurtful chat. Filtering should quietly protect the reading experience.
+- Super Chat payment must not bypass safety or Shield/internal restrictions. Session Shield and internal restrictions are not public YouTube bans.
+
+### Live scrolling
+- The filtered feed is a true scrollable chat timeline: older comments above, newest comments at the bottom.
+- Qualifying new comments arrive automatically. If the creator is at the latest position, follow the latest messages; if the creator scrolls up, preserve their reading position rather than auto-snapping to the bottom.
+- When new comments arrive while scrolled up, show a compact **Jump to latest** control with a new-message count. Selecting it returns to the newest comments.
+- Avoid layout jumps that move the comment being read. The screen must be usable by glance during a livestream, not require continual interaction.
+- Never present sample/placeholder messages or fabricated counts as live data. Disconnected or empty states must be explicit.
+
+### Returning viewers and members
+- Keep returning-viewer context beside the username in the feed when history can be reliably matched: for example, previous-stream count and last-seen time.
+- Show membership status separately from returning-viewer status, and only when verified source data provides it. Do not assume all returning viewers are members or all members are new/returning.
+- Keep concise Community Memory context accessible from the chat item with minimal interruption. Use relevant remembered details to help the host recognize regulars; put fuller profile detail on demand.
+- Never fabricate prior visits, membership, identity, or saved memory. Prefer stable source-provided channel IDs; do not infer identity from similar names or writing style.
+- Do not make the host navigate away from the filtered feed just to recognize a returning viewer.
+
+### Design acceptance test
+At a glance, the creator should see the filtered comments, read them, keep their place as more comments arrive, and recognize regulars. Any UI element that competes with those tasks should be secondary or moved out of Live Mode.
+
+The user has explicitly said these points are requirements. Future implementation must preserve them and must not silently remove/reinterpret them in the name of simplification. The source of truth is this section together with the matching “Glance-first filtered chat and community recognition” section in docs/PROJECT_DECISIONS.md.
+

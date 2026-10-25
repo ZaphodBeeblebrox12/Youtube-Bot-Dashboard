@@ -92,6 +92,7 @@ def ingest_payload(factory, body: LiveIngestBody) -> dict:
     created = 0
     duplicates = 0
     reply_excluded = 0
+    restriction_excluded = 0
     try:
         with factory() as session:
             live_session = session.get(LiveSessionRecord, body.session_id)
@@ -133,6 +134,8 @@ def ingest_payload(factory, body: LiveIngestBody) -> dict:
                     duplicates += 1
                 if result.reply_excluded_by_shield:
                     reply_excluded += 1
+                if result.reply_excluded_by_restriction:
+                    restriction_excluded += 1
             session.commit()
     except ValueError:
         raise
@@ -142,6 +145,7 @@ def ingest_payload(factory, body: LiveIngestBody) -> dict:
         "created": created,
         "duplicates": duplicates,
         "reply_excluded_by_session_shield": reply_excluded,
+        "reply_excluded_by_persistent_internal_restriction": restriction_excluded,
         "status": "accepted",
     }
 

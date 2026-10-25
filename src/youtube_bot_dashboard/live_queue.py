@@ -55,6 +55,7 @@ class TaskState(StrEnum):
     FAILED_RETRYABLE = "FAILED_RETRYABLE"
     FAILED_FINAL = "FAILED_FINAL"
     EXCLUDED_SHIELDED = "EXCLUDED_SHIELDED"
+    EXCLUDED_RESTRICTED = "EXCLUDED_RESTRICTED"
     ANSWERED = "ANSWERED"
     DISMISSED = "DISMISSED"
     SAVED_FOR_LATER = "SAVED_FOR_LATER"
@@ -256,6 +257,7 @@ class IngestResult:
     moderation_task_id: int | None
     reply_task_id: int | None
     reply_excluded_by_shield: bool
+    reply_excluded_by_restriction: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -525,7 +527,8 @@ def ingest_live_message(
         reply_task = next((t for t in tasks if t.pipeline == LivePipeline.REPLY_FINDER.value), None)
         return IngestResult(False, incoming.message_id, mod_task.id if mod_task else None,
                             reply_task.id if reply_task else None,
-                            reply_task is not None and reply_task.state == TaskState.EXCLUDED_SHIELDED.value)
+                            reply_task is not None and reply_task.state == TaskState.EXCLUDED_SHIELDED.value,
+                            reply_task is not None and reply_task.state == TaskState.EXCLUDED_RESTRICTED.value)
 
     message = LiveMessageRecord(
         message_id=incoming.message_id,
@@ -554,19 +557,29 @@ def ingest_live_message(
         observed_at=now,
     )
 
-    excluded = is_user_shielded(
+    from youtube_bot_dashboard.persistent_moderation import is_user_persistently_restricted
+    restricted = is_user_persistently_restricted(session, incoming.user_channel_id)
+    shielded = is_user_shielded(
         session, session_id=incoming.session_id, user_channel_id=incoming.user_channel_id
     )
+    excluded = restricted or shielded
+    excluded_state = (
+        TaskState.EXCLUDED_RESTRICTED.value if restricted
+        else TaskState.EXCLUDED_SHIELDED.value if shielded
+        else TaskState.PENDING.value
+    )
     excluded_reason = (
+        "Excluded by persistent internal restriction before any AI request; no message text sent to a provider."
+        if restricted else
         "Excluded by Session Shield before any AI request; no message text sent to a provider."
-        if excluded else None
+        if shielded else None
     )
     mod_task = LiveMessageTask(
         message_id=incoming.message_id,
         session_id=incoming.session_id,
         pipeline=LivePipeline.MODERATION.value,
         content_hash=digest,
-        state=TaskState.EXCLUDED_SHIELDED.value if excluded else TaskState.PENDING.value,
+        state=excluded_state,
         queued_at=now,
         last_error=excluded_reason,
     )
@@ -577,13 +590,15 @@ def ingest_live_message(
         session_id=incoming.session_id,
         pipeline=LivePipeline.REPLY_FINDER.value,
         content_hash=digest,
-        state=TaskState.EXCLUDED_SHIELDED.value if excluded else TaskState.PENDING.value,
+        state=excluded_state,
         queued_at=now,
         last_error=excluded_reason,
     )
     session.add(reply_task)
     session.flush()
-    return IngestResult(True, incoming.message_id, mod_task.id, reply_task.id, excluded)
+    return IngestResult(
+        True, incoming.message_id, mod_task.id, reply_task.id, shielded, restricted
+    )
 
 
 def _as_utc_aware(value: datetime) -> datetime:
@@ -666,15 +681,26 @@ def prepare_due_batch(
         )
         .limit(config.max_messages_per_batch)))
 
-    # Defensively apply Session Shield to both pipelines at request preparation.
+    # Defensively apply session and persistent internal restrictions to both pipelines.
+    from youtube_bot_dashboard.persistent_moderation import is_user_persistently_restricted
     eligible = []
     for task in tasks:
         message = session.get(LiveMessageRecord, task.message_id)
-        if message and is_user_shielded(session, session_id=session_id, user_channel_id=message.user_channel_id):
-            task.state = TaskState.EXCLUDED_SHIELDED.value
+        restricted = bool(message and is_user_persistently_restricted(session, message.user_channel_id))
+        shielded = bool(message and is_user_shielded(
+            session, session_id=session_id, user_channel_id=message.user_channel_id
+        ))
+        if restricted or shielded:
+            task.state = (
+                TaskState.EXCLUDED_RESTRICTED.value if restricted
+                else TaskState.EXCLUDED_SHIELDED.value
+            )
             task.batch_id = None
             task.provider = None
-            task.last_error = "Excluded by Session Shield before any AI request."
+            task.last_error = (
+                "Excluded by persistent internal restriction before any AI request."
+                if restricted else "Excluded by Session Shield before any AI request."
+            )
         else:
             eligible.append(task)
     tasks = eligible

@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import os
 from contextlib import contextmanager
+from datetime import timedelta
 
 import streamlit as st
 from dotenv import load_dotenv
@@ -38,7 +39,24 @@ from youtube_bot_dashboard.live_queue import (
     unshield_user_for_session,
     update_live_queue_config,
 )
-from youtube_bot_dashboard.storage import create_engine_and_sessions, create_schema
+from youtube_bot_dashboard.storage import create_engine_and_sessions, create_schema, utc_now
+from youtube_bot_dashboard.moderation_appeals import (
+    create_moderation_appeal,
+    list_open_moderation_appeals,
+    resolve_moderation_appeal,
+)
+from youtube_bot_dashboard.persistent_moderation import (
+    apply_internal_restriction,
+    confirm_moderation_incident,
+    get_active_internal_restriction,
+    list_active_internal_restrictions,
+    list_pending_incidents,
+    list_recent_audit_events,
+    list_recent_incidents,
+    overturn_moderation_incident,
+    reject_moderation_incident,
+    revoke_internal_restriction,
+)
 from youtube_bot_dashboard.providers.registry import ProviderRegistry
 from youtube_bot_dashboard.live_polls import (
     POLL_ACTIVE,
@@ -115,12 +133,12 @@ st.caption("Private live-stream control room · Local-first preparation build")
 with st.sidebar:
     st.header("Moderation levers")
     st.success("Lever 1 · Session Shield")
-    st.caption("Internal Reply Finder filter only. People remain free to chat on YouTube.")
+    st.caption("Internal AI-input exclusion for both Moderation and Reply Finder. People remain free to chat on YouTube.")
     st.warning("Lever 2 · Active Moderation is OFF")
     st.caption("No YouTube bans, timeouts, mutes or deletions are connected in this version.")
     page = st.radio(
         "Workspace",
-        ["Overview", "Live Chat", "Reply Queue", "Community Memory", "Live Polls", "Settings", "Past Videos Cleanup"],
+        ["Overview", "Live Chat", "Moderation Review", "Reply Queue", "Community Memory", "Live Polls", "Settings", "Past Videos Cleanup"],
         index=0,
     )
 
@@ -529,6 +547,8 @@ elif page == "Live Chat":
                 message.user_channel_id
                 and (message.session_id, message.user_channel_id) in active_shield_keys
             )
+            persistent_restriction = get_active_internal_restriction(session, message.user_channel_id)
+            is_restricted = persistent_restriction is not None
             approved, reason = is_ai_whitelisted_for_display(
                 moderation_state=moderation_task.state if moderation_task else None,
                 moderation_result=moderation_result,
@@ -536,7 +556,10 @@ elif page == "Live Chat":
                 reply_finder_result=reply_result,
                 is_super_chat=message.is_super_chat,
             )
-            if is_shielded:
+            if is_restricted:
+                approved = False
+                reason = "Viewer is excluded by a persistent internal restriction."
+            elif is_shielded:
                 approved = False
                 reason = "Viewer is currently excluded by Session Shield."
             feed_items.append({
@@ -547,6 +570,7 @@ elif page == "Live Chat":
                 "is_super_chat": bool(message.is_super_chat),
                 "super_chat_amount": super_chat_amount_label(message) if message.is_super_chat else None,
                 "is_shielded": is_shielded,
+                "is_restricted": is_restricted,
                 "approved": approved,
                 "reason": reason,
                 "moderation_state": moderation_task.state if moderation_task else "MISSING",
@@ -672,6 +696,355 @@ elif page == "Live Chat":
                 st.rerun()
     else:
         st.caption("No active Session Shield exclusions for an active session.")
+
+elif page == "Moderation Review":
+    st.subheader("Moderation review and persistent internal restrictions")
+    st.caption(
+        "AI classifications create review candidates, not confirmed offences. A human confirmation may add at most one "
+        "qualifying session strike per stable channel ID and live session. Persistent restrictions exclude messages from "
+        "both AI pipelines; they are internal filters and do not ban or mute anyone on YouTube."
+    )
+    with db_session() as session:
+        pending_incidents = list_pending_incidents(session, limit=200)
+        recent_incidents = list_recent_incidents(session, limit=150)
+        active_restrictions = list_active_internal_restrictions(session)
+        audit_events = list_recent_audit_events(session, limit=100)
+        pending_items = [
+            {
+                "id": item.id,
+                "created_at": item.created_at,
+                "display_name": item.display_name or "Unknown viewer",
+                "user_id": item.user_channel_id,
+                "session_id": item.session_id,
+                "category": item.category,
+                "severity": item.severity_score,
+                "confidence": item.confidence,
+                "explanation": item.explanation,
+                "evidence_ids": json.loads(item.evidence_message_ids_json or "[]"),
+                "status": item.status,
+            }
+            for item in pending_incidents
+        ]
+        recent_items = [
+            {
+                "ID": item.id,
+                "Created": item.created_at,
+                "Viewer": item.display_name or "Unknown viewer",
+                "Stable channel ID": item.user_channel_id or "Unavailable",
+                "Session": item.session_id,
+                "Category": item.category,
+                "Severity": item.severity_score,
+                "Confidence": item.confidence,
+                "Status": item.status,
+                "Counts as strike": item.qualifies_for_strike,
+                "Reviewed by": item.reviewed_by or "",
+            }
+            for item in recent_incidents
+        ]
+        restriction_items = [
+            {
+                "id": item.id,
+                "user_id": item.user_channel_id,
+                "display_name": item.display_name or "Unknown viewer",
+                "restriction_type": item.restriction_type,
+                "reason": item.reason,
+                "starts_at": item.starts_at,
+                "expires_at": item.expires_at,
+                "created_by": item.created_by or "",
+            }
+            for item in active_restrictions
+        ]
+        audit_items = [
+            {
+                "Time": item.created_at,
+                "Event": item.event_type,
+                "Target": item.target_type + " #" + item.target_id,
+                "User channel ID": item.user_channel_id or "",
+                "Actor": item.actor,
+                "Details": item.details_json,
+            }
+            for item in audit_events
+        ]
+
+    st.markdown("#### Pending incidents")
+    if pending_items:
+        st.dataframe(
+            [
+                {
+                    "ID": item["id"],
+                    "Time": item["created_at"],
+                    "Viewer": item["display_name"],
+                    "Stable channel ID": item["user_id"] or "Unavailable",
+                    "Session": item["session_id"],
+                    "Category": item["category"],
+                    "Severity": item["severity"],
+                    "Confidence": item["confidence"],
+                }
+                for item in pending_items
+            ],
+            use_container_width=True,
+            hide_index=True,
+        )
+        pending_ids = [item["id"] for item in pending_items]
+        pending_labels = {
+            item["id"]: f"#{item['id']} · {item['category']} · {item['display_name']} · {item['session_id']}"
+            for item in pending_items
+        }
+        selected_incident_id = st.selectbox(
+            "Review incident", options=pending_ids, format_func=lambda value: pending_labels[value]
+        )
+        selected_incident = next(item for item in pending_items if item["id"] == selected_incident_id)
+        st.write(f"**Category:** {selected_incident['category']} · **Severity:** {selected_incident['severity']}/100 · **Confidence:** {selected_incident['confidence']:.0%}")
+        st.write(f"**Viewer:** {selected_incident['display_name']} · **Stable channel ID:** {selected_incident['user_id'] or 'Unavailable'}")
+        st.write(f"**Session:** {selected_incident['session_id']}")
+        st.write(selected_incident["explanation"])
+        evidence_ids = selected_incident["evidence_ids"]
+        with db_session() as session:
+            evidence_messages = list(session.scalars(
+                select(LiveMessageRecord).where(LiveMessageRecord.message_id.in_(evidence_ids))
+            )) if evidence_ids else []
+            evidence_by_id = {item.message_id: item for item in evidence_messages}
+        st.markdown("**Evidence messages**")
+        if evidence_ids:
+            for evidence_id in evidence_ids:
+                evidence_message = evidence_by_id.get(evidence_id)
+                if evidence_message:
+                    st.markdown(f"- **{evidence_id}** · {evidence_message.username or 'Unknown viewer'}: {evidence_message.text}")
+                else:
+                    st.markdown(f"- Source message ID {evidence_id} · message text is not available in the current message table")
+        else:
+            st.caption("No source evidence IDs were supplied.")
+        review_note = st.text_area("Moderator review note", key=f"incident_review_note_{selected_incident_id}")
+        review_col1, review_col2 = st.columns(2)
+        if review_col1.button("Confirm qualifying incident", type="primary", use_container_width=True):
+            try:
+                with db_session() as session:
+                    outcome = confirm_moderation_incident(
+                        session, incident_id=selected_incident_id, actor="dashboard-moderator", note=review_note
+                    )
+                    session.commit()
+                st.success(
+                    f"Incident confirmed. Confirmed session strikes for this viewer: {outcome['session_strike_count']}. "
+                    + ("The three-session threshold is met for enforcement review; no ban was issued."
+                       if outcome["first_ban_threshold_met"] else "No platform enforcement was attempted.")
+                )
+                st.rerun()
+            except ValueError as exc:
+                st.error(str(exc))
+        if review_col2.button("Dismiss candidate", use_container_width=True):
+            try:
+                with db_session() as session:
+                    reject_moderation_incident(
+                        session, incident_id=selected_incident_id, actor="dashboard-moderator", note=review_note
+                    )
+                    session.commit()
+                st.success("Candidate dismissed. No strike or YouTube action was taken.")
+                st.rerun()
+            except ValueError as exc:
+                st.error(str(exc))
+    else:
+        st.info("No incidents are awaiting review. Future validated violation classifications appear here as candidates.")
+
+    st.markdown("#### Recent incident history")
+    if recent_items:
+        st.dataframe(recent_items, use_container_width=True, hide_index=True)
+        confirmed_items = [item for item in recent_incidents if item.status == "CONFIRMED"]
+        overturnable = [
+            {"id": item.id, "label": f"#{item.id} · {item.category} · {item.display_name or 'Unknown viewer'} · {item.session_id}"}
+            for item in confirmed_items
+        ]
+        if overturnable:
+            selected_confirmed_id = st.selectbox(
+                "Override / overturn a confirmed incident",
+                options=[item["id"] for item in overturnable],
+                format_func=lambda value: next(item["label"] for item in overturnable if item["id"] == value),
+            )
+            overturn_note = st.text_input("Reason for overturning (required)", key="incident_overturn_note")
+            if st.button("Overturn confirmed incident", use_container_width=True):
+                try:
+                    with db_session() as session:
+                        outcome = overturn_moderation_incident(
+                            session, incident_id=selected_confirmed_id,
+                            actor="dashboard-moderator", note=overturn_note,
+                        )
+                        session.commit()
+                    st.success(
+                        f"Incident overturned. Strike count corrected to {outcome['session_strike_count']}. "
+                        "The audit trail records the correction."
+                    )
+                    st.rerun()
+                except ValueError as exc:
+                    st.error(str(exc))
+    else:
+        st.caption("No moderation incidents have been recorded yet.")
+
+    st.markdown("#### Appeals")
+    confirmed_for_appeal = [
+        item for item in recent_incidents if item.status == "CONFIRMED"
+    ]
+    if confirmed_for_appeal:
+        appeal_labels = {
+            item.id: f"#{item.id} · {item.category} · {item.display_name or 'Unknown viewer'} · {item.session_id}"
+            for item in confirmed_for_appeal
+        }
+        with st.form("open_moderation_appeal_form"):
+            appeal_incident_id = st.selectbox(
+                "Confirmed incident being appealed",
+                options=[item.id for item in confirmed_for_appeal],
+                format_func=lambda value: appeal_labels[value],
+            )
+            appellant_label = st.text_input("Appellant label / reference", max_chars=200)
+            appeal_reason = st.text_area("Appeal reason")
+            submit_appeal = st.form_submit_button("Record appeal")
+        if submit_appeal:
+            try:
+                with db_session() as session:
+                    appeal = create_moderation_appeal(
+                        session, incident_id=appeal_incident_id,
+                        appellant_label=appellant_label, reason=appeal_reason,
+                        actor="dashboard-moderator",
+                    )
+                    appeal_id = appeal.id
+                    session.commit()
+                st.success(f"Appeal #{appeal_id} recorded for review.")
+                st.rerun()
+            except ValueError as exc:
+                st.error(str(exc))
+    else:
+        st.caption("Confirm an incident before recording an appeal against it.")
+
+    with db_session() as session:
+        open_appeals = list_open_moderation_appeals(session, limit=100)
+        open_appeal_items = [
+            {
+                "id": item.id, "incident_id": item.incident_id,
+                "appellant": item.appellant_label, "reason": item.reason,
+                "submitted_at": item.submitted_at,
+            }
+            for item in open_appeals
+        ]
+    if open_appeal_items:
+        st.dataframe(
+            [
+                {
+                    "Appeal ID": item["id"], "Incident ID": item["incident_id"],
+                    "Appellant": item["appellant"], "Reason": item["reason"],
+                    "Submitted": item["submitted_at"],
+                }
+                for item in open_appeal_items
+            ],
+            use_container_width=True, hide_index=True,
+        )
+        open_appeal_labels = {
+            item["id"]: f"Appeal #{item['id']} · incident #{item['incident_id']} · {item['appellant']}"
+            for item in open_appeal_items
+        }
+        selected_appeal_id = st.selectbox(
+            "Resolve appeal",
+            options=[item["id"] for item in open_appeal_items],
+            format_func=lambda value: open_appeal_labels[value],
+        )
+        appeal_decision = st.selectbox("Appeal decision", ["UPHOLD", "OVERTURN"])
+        appeal_resolution_note = st.text_input("Appeal resolution note", key="appeal_resolution_note")
+        if st.button("Save appeal decision", use_container_width=True):
+            try:
+                with db_session() as session:
+                    resolved = resolve_moderation_appeal(
+                        session, appeal_id=selected_appeal_id, decision=appeal_decision,
+                        actor="dashboard-moderator", note=appeal_resolution_note,
+                    )
+                    session.commit()
+                st.success(
+                    "Appeal resolved as " + resolved.status + ". "
+                    + ("The incident and any linked strike were corrected." if resolved.status == "OVERTURNED"
+                       else "The confirmed incident remains in place.")
+                )
+                st.rerun()
+            except ValueError as exc:
+                st.error(str(exc))
+
+    st.divider()
+    st.markdown("#### Persistent internal restrictions")
+    st.caption("These restrictions persist across sessions and exclude the stable channel ID from both AI pipelines. They are not YouTube bans.")
+    with st.form("persistent_internal_restriction_form"):
+        restricted_user_id = st.text_input("Stable YouTube channel ID", max_chars=120)
+        restricted_display_name = st.text_input("Display name (label only)", max_chars=300)
+        restriction_reason = st.text_area("Reason for internal restriction")
+        restriction_kind = st.selectbox(
+            "Restriction duration", ["Permanent internal restriction", "Timed internal restriction"]
+        )
+        restriction_hours = st.number_input(
+            "Duration in hours", min_value=1, max_value=8760, value=168, step=1,
+            disabled=restriction_kind != "Timed internal restriction",
+        )
+        apply_restriction = st.form_submit_button("Apply internal restriction")
+    if apply_restriction:
+        try:
+            expiry = utc_now() + timedelta(hours=int(restriction_hours)) if restriction_kind == "Timed internal restriction" else None
+            with db_session() as session:
+                restriction = apply_internal_restriction(
+                    session, user_channel_id=restricted_user_id.strip(),
+                    display_name=restricted_display_name.strip() or None,
+                    reason=restriction_reason,
+                    restriction_type="TIMED" if expiry else "PERMANENT",
+                    expires_at=expiry, actor="dashboard-moderator",
+                )
+                restriction_id = restriction.id
+                session.commit()
+            st.success(
+                f"Internal restriction #{restriction_id} saved. New messages from this channel ID are excluded before AI; "
+                "no YouTube enforcement API was called."
+            )
+            st.rerun()
+        except ValueError as exc:
+            st.error(str(exc))
+
+    if restriction_items:
+        st.dataframe(
+            [
+                {
+                    "ID": item["id"],
+                    "Viewer": item["display_name"],
+                    "Stable channel ID": item["user_id"],
+                    "Type": item["restriction_type"],
+                    "Reason": item["reason"],
+                    "Started": item["starts_at"],
+                    "Expires": item["expires_at"] or "Never",
+                    "Created by": item["created_by"],
+                }
+                for item in restriction_items
+            ],
+            use_container_width=True,
+            hide_index=True,
+        )
+        restriction_ids = [item["id"] for item in restriction_items]
+        restriction_labels = {
+            item["id"]: f"#{item['id']} · {item['display_name']} · {item['user_id']}"
+            for item in restriction_items
+        }
+        selected_restriction_id = st.selectbox(
+            "Clear an internal restriction",
+            options=restriction_ids,
+            format_func=lambda value: restriction_labels[value],
+        )
+        if st.button("Clear selected internal restriction", use_container_width=True):
+            with db_session() as session:
+                did_revoke = revoke_internal_restriction(
+                    session, restriction_id=selected_restriction_id,
+                    actor="dashboard-moderator", reason="Cleared from Moderation Review workspace.",
+                )
+                session.commit()
+            if did_revoke:
+                st.success("Restriction cleared for future incoming messages. Previously excluded messages remain excluded.")
+                st.rerun()
+    else:
+        st.caption("No active persistent internal restrictions.")
+
+    st.markdown("#### Audit history")
+    if audit_items:
+        st.dataframe(audit_items, use_container_width=True, hide_index=True)
+    else:
+        st.caption("No moderation audit events recorded yet.")
 
 elif page == "Reply Queue":
     st.subheader("Private Reply Finder queue")
