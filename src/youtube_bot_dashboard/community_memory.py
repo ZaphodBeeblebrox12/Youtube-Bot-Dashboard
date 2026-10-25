@@ -168,6 +168,7 @@ def record_viewer_activity(
         session.flush()
         return profile
 
+    previous_session_id = profile.last_seen_session_id
     profile.last_seen_at = now
     profile.last_seen_session_id = session_id
     profile.total_message_count += 1
@@ -180,7 +181,10 @@ def record_viewer_activity(
         CommunityViewerVisit.session_id == session_id,
     ))
     if visit is None:
-        profile.distinct_sessions_seen += 1
+        # Visit detail is TTL'd after three days. Keep the compact aggregate
+        # accurate for ordinary returning sessions using the prior session ID.
+        if previous_session_id != session_id:
+            profile.distinct_sessions_seen += 1
         session.add(CommunityViewerVisit(
             user_channel_id=user_channel_id,
             session_id=session_id,
