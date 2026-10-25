@@ -2,7 +2,7 @@
 
 **Updated:** 2026-10-25  
 **Repository:** https://github.com/ZaphodBeeblebrox12/Youtube-Bot-Dashboard  
-**Working branch:** `main`  
+**Working branch:** `feature/persistent-moderation` (do not merge into `main` without explicit approval)  
 **Code checkpoint before this handoff document:** `4026f55eec93b8492f024510cad21774093b17e7`  
 **Last verified CI at that code checkpoint:** [Run 40130179648](https://github.com/ZaphodBeeblebrox12/Youtube-Bot-Dashboard/actions/runs/40130179648) — **100 passed in 3.28s**  
 **Purpose of next chat:** Continue the existing design; do not ask the user to re-explain decisions already captured in notes.
@@ -166,3 +166,35 @@ Run focused tests first, then full CI. Test against the fake YouTube service; re
 - The dashboard has review, dismissal, override/overturn, appeal, strike-correction and audit controls.
 - Policy authority: PROJECT_DECISIONS.md. The proposed 7-day/30-day/permanent escalation remains unresolved; do not activate automatic enforcement until the owner approves the final rulebook.
 - Test and CI status must be updated after the branch workflow completes.
+
+## 9. Non-negotiable live UX purpose — filtered chat and community recognition (2026-10-25)
+
+The owner clarified the product's primary motivation: raw YouTube comments can be hurtful and demoralizing. This dashboard is being built so the creator can replace the raw YouTube chat view with a safer, curated feed of comments worth reading while livestreaming. It should also help returning viewers feel recognized and remembered, so the channel feels like a real community. Treat this as a core product requirement, not a design preference.
+
+### Default live experience
+- The default live screen is **Filtered Chat**, not a KPI overview, raw chat log, or moderation workbench.
+- The centre of attention is the actual filtered comments that the creator can read quickly while speaking. Keep controls, metrics and status text secondary.
+- Show only messages that pass the configured safety/display filters and the Reply Finder selection requirement. Do not mix raw or held-back comments into the ordinary reading feed. Any raw/audit view must be separately and deliberately opened.
+- Do **not** put a repetitive “cleared/safe/approved” label on every filtered comment. Being in this feed already means it passed the configured filters. Show only labels that add meaning, such as a source-confirmed Super Chat or verified membership.
+- Do not draw constant attention to the amount or content of rejected/hurtful chat. Filtering should quietly protect the reading experience.
+- Super Chat payment must not bypass safety or Shield/internal restrictions. Session Shield and internal restrictions are not public YouTube bans.
+
+### Live scrolling
+- The filtered feed is a true scrollable chat timeline: older comments above, newest comments at the bottom.
+- Qualifying new comments arrive automatically. If the creator is at the latest position, follow the latest messages; if the creator scrolls up, preserve their reading position rather than auto-snapping to the bottom.
+- When new comments arrive while scrolled up, show a compact **Jump to latest** control with a new-message count. Selecting it returns to the newest comments.
+- Avoid layout jumps that move the comment being read. The screen must be usable by glance during a livestream, not require continual interaction.
+- Never present sample/placeholder messages or fabricated counts as live data. Disconnected or empty states must be explicit.
+
+### Returning viewers and members
+- Keep returning-viewer context beside the username in the feed when history can be reliably matched: for example, previous-stream count and last-seen time.
+- Show membership status separately from returning-viewer status, and only when verified source data provides it. Do not assume all returning viewers are members or all members are new/returning.
+- Keep concise Community Memory context accessible from the chat item with minimal interruption. Use relevant remembered details to help the host recognize regulars; put fuller profile detail on demand.
+- Never fabricate prior visits, membership, identity, or saved memory. Prefer stable source-provided channel IDs; do not infer identity from similar names or writing style.
+- Do not make the host navigate away from the filtered feed just to recognize a returning viewer.
+
+### Design acceptance test
+At a glance, the creator should see the filtered comments, read them, keep their place as more comments arrive, and recognize regulars. Any UI element that competes with those tasks should be secondary or moved out of Live Mode.
+
+The user has explicitly said these points are requirements. Future implementation must preserve them and must not silently remove/reinterpret them in the name of simplification. The source of truth is this section together with the matching “Glance-first filtered chat and community recognition” section in docs/PROJECT_DECISIONS.md.
+
