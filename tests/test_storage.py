@@ -155,26 +155,6 @@ def test_duplicate_comment_id_cannot_be_reused_for_another_video(db):
             ))
 
 
-def test_create_schema_adds_avatar_columns_to_older_live_tables():
-    from sqlalchemy import inspect
-
-    engine, sessions = create_engine_and_sessions("sqlite://")
-    create_schema(engine)
-    try:
-        # Simulate a database created before avatar support was added.
-        with engine.begin() as connection:
-            connection.exec_driver_sql("ALTER TABLE live_messages DROP COLUMN avatar_url")
-            connection.exec_driver_sql("ALTER TABLE community_viewer_profiles DROP COLUMN avatar_url")
-
-        create_schema(engine)
-        live_columns = {column["name"] for column in inspect(engine).get_columns("live_messages")}
-        profile_columns = {column["name"] for column in inspect(engine).get_columns("community_viewer_profiles")}
-        assert "avatar_url" in live_columns
-        assert "avatar_url" in profile_columns
-    finally:
-        engine.dispose()
-
-
 def test_records_persist_after_engine_restart(tmp_path):
     db_path = tmp_path / "comments.sqlite3"
     url = f"sqlite:///{db_path}"

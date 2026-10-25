@@ -34,7 +34,6 @@ def test_extract_super_chat_amount_tier_and_comment_from_youtube_metadata():
         present_fields={"is_chat_sponsor"},
         channel_id="channel-paid",
         display_name="Paid Viewer",
-        profile_image_url="https://yt3.ggpht.com/paid-viewer",
         is_chat_sponsor=True,
     )
     message = SimpleNamespace(id="youtube-paid-1", snippet=snippet, author_details=author)
@@ -50,7 +49,6 @@ def test_extract_super_chat_amount_tier_and_comment_from_youtube_metadata():
         "INR",
         "₹500.00",
         2,
-        "https://yt3.ggpht.com/paid-viewer",
     )
 
 

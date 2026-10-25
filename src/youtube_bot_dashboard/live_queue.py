@@ -28,8 +28,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, Session, mapped_column
 
 from youtube_bot_dashboard.storage import Base, utc_now, text_hash
-from youtube_bot_dashboard.avatar_utils import normalize_avatar_url
-from youtube_bot_dashboard.community_memory import CommunityViewerProfile, record_viewer_activity
+from youtube_bot_dashboard.community_memory import record_viewer_activity
 
 
 LIVE_MESSAGE_TEXT_EXPIRED = "[expired by retention policy]"
@@ -149,7 +148,6 @@ class LiveMessageRecord(Base):
     session_id: Mapped[str] = mapped_column(ForeignKey("live_sessions.session_id", ondelete="CASCADE"), index=True, nullable=False)
     user_channel_id: Mapped[str | None] = mapped_column(String(120), nullable=True, index=True)
     username: Mapped[str | None] = mapped_column(String(300), nullable=True)
-    avatar_url: Mapped[str | None] = mapped_column(String(2048), nullable=True)
     text: Mapped[str] = mapped_column(Text, nullable=False)
     is_super_chat: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     super_chat_amount_micros: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
@@ -235,7 +233,6 @@ class IncomingLiveMessage:
     super_chat_currency: str | None = None
     super_chat_amount_display: str | None = None
     super_chat_tier: int | None = None
-    avatar_url: str | None = None
 
     def __post_init__(self) -> None:
         if not self.message_id.strip():
@@ -504,7 +501,6 @@ def ingest_live_message(
 
     now = received_at or utc_now()
     digest = text_hash(incoming.text)
-    normalized_avatar_url = normalize_avatar_url(incoming.avatar_url)
     existing = session.get(LiveMessageRecord, incoming.message_id)
     if existing is not None:
         if existing.session_id != incoming.session_id:
@@ -517,12 +513,6 @@ def ingest_live_message(
             existing.content_hash = digest
         if incoming.is_super_chat:
             existing.is_super_chat = True
-        if normalized_avatar_url and incoming.user_channel_id == existing.user_channel_id:
-            existing.avatar_url = normalized_avatar_url
-            if existing.user_channel_id:
-                profile = session.get(CommunityViewerProfile, existing.user_channel_id)
-                if profile is not None:
-                    profile.avatar_url = normalized_avatar_url
         if incoming.super_chat_amount_micros is not None:
             existing.super_chat_amount_micros = incoming.super_chat_amount_micros
         if incoming.super_chat_currency is not None:
@@ -547,7 +537,6 @@ def ingest_live_message(
         session_id=incoming.session_id,
         user_channel_id=incoming.user_channel_id,
         username=incoming.username,
-        avatar_url=normalized_avatar_url,
         text=incoming.text,
         is_super_chat=incoming.is_super_chat,
         super_chat_amount_micros=incoming.super_chat_amount_micros,
@@ -567,7 +556,6 @@ def ingest_live_message(
         display_name=incoming.username,
         session_id=incoming.session_id,
         is_member=incoming.is_member,
-        avatar_url=normalized_avatar_url,
         observed_at=now,
     )
 
