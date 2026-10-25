@@ -8,7 +8,7 @@ This document is the source of truth for settled decisions. Update it when decis
 
 ## Product goal
 
-Build a dashboard and moderation bot that receives chat data as JSON, batches messages for classification by a selectable AI provider (Gemini or Qwen), records confirmed offences, and applies a configurable escalation policy. Inspect actual input samples and existing code before assuming fields or platform capabilities.
+Build a dashboard and moderation bot that receives chat data as JSON, batches messages for classification by selectable AI providers (Gemini, Qwen, DeepSeek, and Kimi), records confirmed offences, and applies a configurable escalation policy. Inspect actual input samples and existing code before assuming fields or platform capabilities.
 
 ## Architecture
 
@@ -855,3 +855,13 @@ All cards must use live database-backed data. Do not invent live viewer counts o
 - The cleanup is transaction-based and must fail closed on malformed stored batch payloads. Existing content hashes/metadata remain for deduplication/audit.
 - This policy stops retaining old raw bodies; database files may reuse freed pages without shrinking their physical file size. SQLite/PostgreSQL compaction is a separate maintenance action, not part of this dial.
 
+
+
+## Provider routing and observability
+
+- Optional providers: Gemini, Qwen, DeepSeek, and Kimi. Model IDs and credentials are supplied via environment variables; providers without valid configuration are treated as unavailable.
+- Routing remains batch-level round robin with independent persistent rotation for Moderation and Reply Finder. Fixed-provider modes are intended for controlled testing. A batch's assigned provider is retained through retries; provider switching is not automatic.
+- Prompt/context caching is handled by each provider where supported. Report cache-hit and cache-write tokens only when the API returns those measurements; missing usage is unknown, not zero. Stable system prompts should remain at the start of inputs to help providers reuse eligible prefixes.
+- Provider analytics track request outcomes, latency, input/output tokens, cache usage, and cost estimates by provider and pipeline. Cost is not guessed: an owner must save a rate card for the exact configured model in Settings. Rates are USD per million tokens. Cost estimates only cover requests with reported input/output usage; when cache details are unavailable, input is conservatively estimated at the uncached-input rate.
+- Performance-aware routing is deliberately deferred until actual measurements exist. Round robin remains the baseline so provider comparisons are not biased by automatic selection.
+- Feature implementation branch: `feature/four-provider-analytics`. Changes are not merged or deployed pending owner review.
