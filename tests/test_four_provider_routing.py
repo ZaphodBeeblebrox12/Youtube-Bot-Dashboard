@@ -8,7 +8,9 @@ from youtube_bot_dashboard.live_queue import (
     LiveQueueConfig,
     ProviderName,
     ProviderStrategy,
+    fail_live_batch,
     ingest_live_message,
+    mark_live_batch_sent,
     prepare_due_batch,
     register_live_session,
 )
@@ -85,3 +87,68 @@ def test_fixed_provider_strategy_requires_that_provider_to_be_enabled():
             provider_strategy=ProviderStrategy.KIMI_ONLY,
             enabled_providers=(ProviderName.GEMINI,),
         )
+
+
+def test_round_robin_retry_stays_with_original_provider_without_advancing_rotation(db):
+    _, factory = db
+    base = datetime.now(timezone.utc)
+    providers = (
+        ProviderName.GEMINI,
+        ProviderName.QWEN,
+        ProviderName.DEEPSEEK,
+        ProviderName.KIMI,
+    )
+    config = LiveQueueConfig(
+        batch_delay_seconds=0.25,
+        max_messages_per_batch=1,
+        enabled_providers=providers,
+        provider_strategy=ProviderStrategy.ROUND_ROBIN,
+    )
+    with factory() as session:
+        for message_id in ("retry-me", "new-message"):
+            ingest_live_message(
+                session,
+                IncomingLiveMessage(
+                    message_id=message_id,
+                    session_id="session-1",
+                    user_channel_id=message_id,
+                    text=message_id,
+                ),
+                received_at=base,
+            )
+        session.commit()
+
+        first = prepare_due_batch(
+            session, session_id="session-1", pipeline=LivePipeline.MODERATION,
+            config=config, now=base + timedelta(seconds=10),
+        )
+        assert first is not None
+        assert first.provider is ProviderName.GEMINI
+        session.commit()
+
+        mark_live_batch_sent(
+            session, first.batch_id, model_id="gemini-test",
+            sent_at=base + timedelta(seconds=11),
+        )
+        fail_live_batch(
+            session, first.batch_id, error="simulated timeout",
+            config=config, failed_at=base + timedelta(seconds=12),
+        )
+        session.commit()
+
+        retry = prepare_due_batch(
+            session, session_id="session-1", pipeline=LivePipeline.MODERATION,
+            config=config, now=base + timedelta(seconds=60),
+        )
+        assert retry is not None
+        assert retry.message_ids == ("retry-me",)
+        assert retry.provider is ProviderName.GEMINI
+        session.commit()
+
+        next_new_batch = prepare_due_batch(
+            session, session_id="session-1", pipeline=LivePipeline.MODERATION,
+            config=config, now=base + timedelta(seconds=61),
+        )
+        assert next_new_batch is not None
+        assert next_new_batch.message_ids == ("new-message",)
+        assert next_new_batch.provider is ProviderName.QWEN
