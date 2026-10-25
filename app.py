@@ -120,6 +120,42 @@ def _avatar_markup(image_url: str | None, display_name: str | None, size: int = 
     )
 
 
+def _copy_response_button(response_text: str) -> None:
+    """Provide a clipboard action with a manual-selection fallback."""
+    safe_text = json.dumps(str(response_text), ensure_ascii=False)
+    safe_text = safe_text.replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026")
+    st.components.v1.html(
+        f"""
+        <html><body style="margin:0;font:12px/1.4 Inter,system-ui,sans-serif">
+        <button type="button" onclick="copyResponse()" style="border:1px solid #d5deea;background:#fff;color:#263852;border-radius:7px;padding:5px 10px;font:600 11px Inter,system-ui,sans-serif;cursor:pointer">Copy</button>
+        <span id="tt-copy-status" aria-live="polite" style="margin-left:6px;color:#64748b;font-size:10px"></span>
+        <script>
+        const copyValue = {safe_text};
+        async function copyResponse() {{
+          const status = document.getElementById("tt-copy-status");
+          try {{
+            if (!window.parent.navigator.clipboard) throw new Error("Clipboard unavailable");
+            await window.parent.navigator.clipboard.writeText(copyValue);
+            status.textContent = "Copied";
+          }} catch (error) {{
+            const area = document.createElement("textarea");
+            area.value = copyValue;
+            area.style.width = "100%";
+            area.style.height = "42px";
+            area.setAttribute("aria-label", "Select this text and copy it manually");
+            document.body.appendChild(area);
+            area.focus();
+            area.select();
+            status.textContent = "Select text and press Ctrl+C";
+          }}
+        }}
+        </script></body></html>
+        """,
+        height=36,
+        scrolling=False,
+    )
+
+
 def read_counts(session):
     total_messages = session.scalar(select(func.count()).select_from(LiveMessageRecord)) or 0
     total_tasks = session.scalar(select(func.count()).select_from(LiveMessageTask)) or 0
@@ -173,7 +209,6 @@ def load_dashboard_snapshot():
             message_query = message_query.where(LiveMessageRecord.message_id == "__no_messages__")
         messages = list(session.scalars(
             message_query.order_by(
-                LiveMessageRecord.is_super_chat.desc(),
                 LiveMessageRecord.first_seen_at.desc(),
             ).limit(250)
         ))
@@ -298,8 +333,20 @@ def load_dashboard_snapshot():
                 CommunityViewerProfile.is_member.is_(True),
             )
         ) or 0
+        memory_count = session.scalar(
+            select(func.count()).select_from(CommunityMemory).where(
+                CommunityMemory.status == "SAVED"
+            )
+        ) or 0
 
-        lead = queue_items[0] if queue_items else (shown_items[0] if shown_items else None)
+        selected_message_id = st.session_state.get("dashboard_selected_message_id")
+        selectable_items = feed_items if st.session_state.get("dashboard_chat_visibility_mode") == "Show Unfiltered" else shown_items
+        lead = next(
+            (item for item in selectable_items if item["message_id"] == selected_message_id),
+            None,
+        )
+        if lead is None:
+            lead = queue_items[0] if queue_items else (shown_items[0] if shown_items else None)
         lead_profile = None
         lead_memories = []
         if lead and lead["user_id"]:
@@ -340,12 +387,14 @@ def load_dashboard_snapshot():
             "active": bool(active_sessions),
             "session_label": "active stream" if active_sessions else "most recent stream",
             "current_session_count": len(messages),
+            "feed_items": feed_items,
             "shown_items": shown_items,
             "hidden_items": hidden_items,
             "queue_items": queue_items,
             "super_chats": super_chats,
             "shields": shields,
             "profile_count": profile_count,
+            "memory_count": memory_count,
             "returning_count": returning_count,
             "returning_member_count": returning_member_count,
             "lead": lead,
@@ -416,28 +465,40 @@ with st.sidebar:
     nav_items = [
         "Dashboard", "Live Chat", "Reply Queue", "Super Chats", "Members",
         "Community Memory", "Filtered Messages", "Shield / Blocks", "Analytics",
-        "Live Polls", "Settings", "Past Videos Cleanup",
+        "Live Polls", "Settings",
     ]
+    nav_labels = {
+        "Dashboard": f"▦  Dashboard · {'LIVE' if dashboard['active'] else 'OFFLINE'}",
+        "Live Chat": f"▣  Live Chat · {len(dashboard['shown_items'])}",
+        "Reply Queue": f"☷  Reply Queue · {len(dashboard['queue_items'])}",
+        "Super Chats": f"＄  Super Chats · {len(dashboard['super_chats'])}",
+        "Members": f"♙  Members · {dashboard['profile_count']}",
+        "Community Memory": f"♡  Community Memory · {dashboard['memory_count']}",
+        "Filtered Messages": f"⊘  Filtered Messages · {len(dashboard['hidden_items'])}",
+        "Shield / Blocks": f"⛨  Shield / Blocks · {len(dashboard['shields'])}",
+        "Analytics": "▥  Analytics",
+        "Live Polls": "▤  Live Polls",
+        "Settings": "⚙  Settings",
+    }
     page = st.radio(
         "Workspace",
         nav_items,
         index=0,
         key="workspace_nav",
-        format_func=lambda value: {
-            "Dashboard": "▦  Dashboard",
-            "Live Chat": "▣  Live Chat",
-            "Reply Queue": "☷  Reply Queue",
-            "Super Chats": "＄  Super Chats",
-            "Members": "♙  Members",
-            "Community Memory": "♡  Community Memory",
-            "Filtered Messages": "⊘  Filtered Messages",
-            "Shield / Blocks": "⛨  Shield / Blocks",
-            "Analytics": "▥  Analytics",
-            "Live Polls": "▤  Live Polls",
-            "Settings": "⚙  Settings",
-            "Past Videos Cleanup": "⌫  Past Videos Cleanup",
-        }.get(value, value),
+        format_func=lambda value: nav_labels.get(value, value),
     )
+    st.divider()
+    st.markdown("#### CHAT VISIBILITY")
+    chat_visibility_mode = st.radio(
+        "Chat visibility",
+        ["AI Approved Only", "Show Unfiltered"],
+        index=0,
+        key="dashboard_chat_visibility_mode",
+        label_visibility="collapsed",
+    )
+    st.caption("Recommended · default" if chat_visibility_mode == "AI Approved Only" else "Manual review only")
+    if chat_visibility_mode == "Show Unfiltered":
+        st.caption("Filtered message text is revealed only in this explicit manual-review view.")
     st.divider()
     st.caption("SESSION SHIELD")
     st.success("Internal AI-input filter ready")
@@ -445,18 +506,83 @@ with st.sidebar:
     st.caption("Database: " + ("DATABASE_URL configured" if os.environ.get("DATABASE_URL") else "local SQLite"))
 
 if page == "Dashboard":
-    st.markdown("### Live Chat <span class='tt-tag tt-green'>AI APPROVED</span>", unsafe_allow_html=True)
-    st.caption(
-        "The default stream view shows only safety-cleared, useful messages. "
-        "Filtered message bodies stay hidden; Super Chats retain priority only after safety clearance."
-    )
-    chat_col, detail_col = st.columns([2.2, 1.0], gap="medium")
+    manual_review = chat_visibility_mode == "Show Unfiltered"
+    status_label = "MANUAL REVIEW" if manual_review else "AI APPROVED"
+    status_class = "tt-amber" if manual_review else "tt-green"
+    st.markdown(f"### Live Chat <span class='tt-tag {status_class}'>{status_label}</span>", unsafe_allow_html=True)
+    if manual_review:
+        st.caption("Unfiltered messages are shown only for deliberate manual review. No reply is sent or published.")
+    else:
+        st.caption(
+            "The default stream view shows only safety-cleared, useful messages. "
+            "Filtered message bodies stay hidden; Super Chats retain priority only after safety clearance."
+        )
+    chat_col, detail_col = st.columns([1.95, 1.0], gap="medium")
     with chat_col:
-        st.markdown("#### Live conversation")
-        st.caption(f"Recent approved messages · {dashboard['session_label']} · Super Chats first")
-        if not dashboard["shown_items"]:
-            st.info("No messages have passed the AI safety and usefulness checks yet. No sample comments are fabricated here.")
-        for item in dashboard["shown_items"][:6]:
+        visible_feed_items = dashboard["feed_items"] if manual_review else dashboard["shown_items"]
+        control_cols = st.columns([1.65, 1.0, 1.0], gap="small")
+        with control_cols[0]:
+            st.markdown("#### Live conversation")
+            st.caption(f"{'Messages for manual review' if manual_review else 'Recent approved messages'} · {dashboard['session_label']}")
+        with control_cols[1]:
+            message_filter = st.selectbox(
+                "Filter messages",
+                ["All messages", "Questions only", "Super Chats"],
+                key="dashboard_message_filter",
+                label_visibility="collapsed",
+            )
+        with control_cols[2]:
+            message_sort = st.selectbox(
+                "Sort messages",
+                ["Newest first", "Super Chats first", "Priority first"],
+                key="dashboard_message_sort",
+                label_visibility="collapsed",
+            )
+        if message_filter == "Questions only":
+            visible_feed_items = [item for item in visible_feed_items if "QUESTION" in str(item["question_type"]).upper()]
+        elif message_filter == "Super Chats":
+            visible_feed_items = [item for item in visible_feed_items if item["is_super_chat"]]
+        if message_sort == "Super Chats first":
+            paid_items = sorted(
+                (item for item in visible_feed_items if item["is_super_chat"]),
+                key=lambda item: str(item["published_at"] or ""),
+                reverse=True,
+            )
+            regular_items = sorted(
+                (item for item in visible_feed_items if not item["is_super_chat"]),
+                key=lambda item: str(item["published_at"] or ""),
+                reverse=True,
+            )
+            visible_feed_items = paid_items + regular_items
+        elif message_sort == "Priority first":
+            priority_order = {"HIGH": 0, "NORMAL": 1, "LOW": 2}
+            visible_feed_items = sorted(
+                visible_feed_items,
+                key=lambda item: (not item["is_super_chat"], priority_order.get(item["priority"], 1)),
+            )
+        selectable_ids = [item["message_id"] for item in visible_feed_items]
+        if selectable_ids:
+            current_selection = st.session_state.get("dashboard_selected_message_id")
+            if current_selection not in selectable_ids:
+                fallback_lead = dashboard["lead"]
+                current_selection = fallback_lead["message_id"] if fallback_lead and fallback_lead["message_id"] in selectable_ids else selectable_ids[0]
+            selected_label = st.selectbox(
+                "Selected message details",
+                options=selectable_ids,
+                index=selectable_ids.index(current_selection),
+                format_func=lambda message_id: next(
+                    (f"{item['username']} · {item['time_label']}" for item in visible_feed_items if item["message_id"] == message_id),
+                    message_id,
+                ),
+                key="dashboard_detail_selection",
+                label_visibility="collapsed",
+            )
+            if st.session_state.get("dashboard_selected_message_id") != selected_label:
+                st.session_state["dashboard_selected_message_id"] = selected_label
+                st.rerun()
+        else:
+            st.info("No messages match this view. No sample comments are fabricated here.")
+        for item in visible_feed_items[:6]:
             with st.container(border=True):
                 # Stack the message and its AI assistance within each card, matching the approved layout.
                 message_col = st.container()
@@ -494,8 +620,12 @@ if page == "Dashboard":
                         f"{item['question_type'].replace('_', ' ').title()} · "
                         f"{item['priority']} priority · {item['category']}"
                     )
+                    if not item["approved"]:
+                        st.caption("Filtered · manual review only. AI hints and reply actions are disabled for this message.")
                 with response_col:
-                    if item["ease"] in {"MODERATE", "DIFFICULT"}:
+                    if not item["approved"]:
+                        st.caption("No AI-generated response is displayed for an unapproved message.")
+                    elif item["ease"] in {"MODERATE", "DIFFICULT"}:
                         st.markdown(f"**{item['ease'].title()} · AI hint**")
                         if item["ai_hint"]:
                             st.info(item["ai_hint"])
@@ -504,6 +634,15 @@ if page == "Dashboard":
                         st.markdown("**Suggested response · exactly 2 sentences**")
                         if item["answer"]:
                             st.write(item["answer"])
+                            action_cols = st.columns([1.05, 1.0], gap="small")
+                            with action_cols[0]:
+                                if st.button("Use as reply", key=f"dashboard-use-reply-{item['message_id']}"):
+                                    st.session_state["selected_live_response_message_id"] = item["message_id"]
+                                    st.session_state["selected_live_response_text"] = item["answer"]
+                            with action_cols[1]:
+                                _copy_response_button(item["answer"])
+                            if st.session_state.get("selected_live_response_message_id") == item["message_id"]:
+                                st.caption("Selected for your on-stream response · nothing is posted to YouTube.")
                             if item["answer_validation"] == "REVIEW_REQUIRED":
                                 st.warning("Sentence-count check needs review; treat this as a draft.")
                         else:
@@ -515,7 +654,7 @@ if page == "Dashboard":
                     else:
                         # UI deliberately provides no AI content for easy items.
                         st.caption("Easy question · no AI hint or suggested response")
-                    if item["reply_task_id"] and item["reply_state"] == TaskState.COMPLETED.value and item["reply_result"].get("selected"):
+                    if item["approved"] and item["reply_task_id"] and item["reply_state"] == TaskState.COMPLETED.value and item["reply_result"].get("selected"):
                         done_col, skip_col = st.columns(2)
                         if done_col.button("Mark answered", key=f"dashboard-answered-{item['reply_task_id']}"):
                             with db_session() as session:
@@ -552,11 +691,23 @@ if page == "Dashboard":
                     st.markdown(f"💛 **{lead['super_chat_amount']} Super Chat**")
                 st.write(lead["text"])
                 st.caption(f"{lead['question_type'].replace('_', ' ').title()} · {lead['ease'].title()}")
-                if lead["ease"] in {"MODERATE", "DIFFICULT"}:
+                if not lead["approved"]:
+                    st.caption("Filtered message shown only because manual review is enabled. AI hints and reply actions are withheld.")
+                elif lead["ease"] in {"MODERATE", "DIFFICULT"}:
                     st.markdown("**AI hint**")
                     st.write(lead["ai_hint"] or "Hint needs review.")
                     st.markdown("**Suggested response (2 sentences)**")
                     st.write(lead["answer"] or "No response returned.")
+                    if lead["approved"] and lead["answer"]:
+                        action_cols = st.columns([1.05, 1.0], gap="small")
+                        with action_cols[0]:
+                            if st.button("Use as reply", key=f"dashboard-use-lead-{lead['message_id']}"):
+                                st.session_state["selected_live_response_message_id"] = lead["message_id"]
+                                st.session_state["selected_live_response_text"] = lead["answer"]
+                        with action_cols[1]:
+                            _copy_response_button(lead["answer"])
+                        if st.session_state.get("selected_live_response_message_id") == lead["message_id"]:
+                            st.caption("Selected for your on-stream response · nothing is posted to YouTube.")
             profile = dashboard["lead_profile"]
             st.markdown("#### Member info")
             if profile:
@@ -583,7 +734,13 @@ if page == "Dashboard":
                         with st.container(border=True):
                             st.markdown("✨ **Suggested follow-up**")
                             st.write(next_memory["follow_up"])
-                            if st.button("Used this follow-up", key=f"dashboard-memory-used-{next_memory['id']}"):
+                            followup_cols = st.columns([1.0, 1.0], gap="small")
+                            with followup_cols[0]:
+                                if st.button("Use follow-up", key=f"dashboard-use-followup-{next_memory['id']}"):
+                                    st.session_state["selected_live_followup_id"] = next_memory["id"]
+                                    st.session_state["selected_live_followup_text"] = next_memory["follow_up"]
+                            with followup_cols[1]:
+                                if st.button("Used this follow-up", key=f"dashboard-memory-used-{next_memory['id']}"):
                                 with db_session() as session:
                                     saved = session.get(CommunityMemory, next_memory["id"])
                                     if saved:
@@ -592,6 +749,8 @@ if page == "Dashboard":
                                         saved.last_used_session_id = lead["session_id"]
                                         session.commit()
                                 st.rerun()
+                            if st.session_state.get("selected_live_followup_id") == next_memory["id"]:
+                                st.caption("Selected for your on-stream follow-up · not posted to YouTube.")
                 else:
                     st.caption("No saved memory for this viewer yet.")
             else:
@@ -1462,17 +1621,6 @@ elif page == "Community Memory":
             st.rerun()
     else:
         st.caption("No viewer profiles have been recorded yet.")
-
-elif page == "Past Videos Cleanup":
-    st.subheader("Past Videos Cleanup")
-    st.write("Daily sweep default: 9:00 PM Asia/Kolkata")
-    st.info(
-        "The saved design calls for a rolling 20-day window per video and database-based deduplication. "
-        "The YouTube OAuth connection, scheduler and comment-listing API are not connected yet."
-    )
-    st.write("Deletion mode: Preview and owner approval first.")
-    st.write("Auto-delete: OFF.")
-
 
 elif page == "Super Chats":
     st.subheader("Super Chats")
