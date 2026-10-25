@@ -42,6 +42,7 @@ from youtube_bot_dashboard.prompts.reply_finder import REPLY_FINDER_SYSTEM_PROMP
 from youtube_bot_dashboard.providers.base import ProviderError
 from youtube_bot_dashboard.providers.registry import ProviderRegistry
 from youtube_bot_dashboard.storage import create_engine_and_sessions, create_schema, utc_now
+from youtube_bot_dashboard.message_retention import run_live_message_retention_cleanup
 
 logger = logging.getLogger("youtube_bot_dashboard.live_worker")
 
@@ -561,8 +562,22 @@ def main() -> None:
     if not registry.available():
         logger.warning("No AI providers configured. Set Gemini or Qwen environment variables before starting the worker.")
     logger.info("Live worker started; provider(s) configured: %s", [p.value for p in registry.available()])
+    retention_check_interval = max(
+        60.0, float(os.getenv("LIVE_MESSAGE_RETENTION_CHECK_SECONDS", "3600"))
+    )
+    last_retention_check = 0.0
     try:
         while True:
+            monotonic_now = time.monotonic()
+            if monotonic_now - last_retention_check >= retention_check_interval:
+                try:
+                    retention_result = run_live_message_retention_cleanup(session_factory)
+                    logger.info("Live-message retention cleanup: %s", retention_result)
+                except Exception:
+                    # A retention error must be visible without stopping the AI queue worker.
+                    logger.exception("Live-message retention cleanup failed")
+                last_retention_check = time.monotonic()
+
             outcomes = run_worker_once(session_factory, registry)
             for outcome in outcomes:
                 logger.info("Batch outcome: %s", outcome)

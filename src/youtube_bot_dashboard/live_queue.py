@@ -31,6 +31,9 @@ from youtube_bot_dashboard.storage import Base, utc_now, text_hash
 from youtube_bot_dashboard.community_memory import record_viewer_activity
 
 
+LIVE_MESSAGE_TEXT_EXPIRED = "[expired by retention policy]"
+
+
 class LivePipeline(StrEnum):
     MODERATION = "MODERATION"
     REPLY_FINDER = "REPLY_FINDER"
@@ -55,6 +58,7 @@ class TaskState(StrEnum):
     FAILED_RETRYABLE = "FAILED_RETRYABLE"
     FAILED_FINAL = "FAILED_FINAL"
     EXCLUDED_SHIELDED = "EXCLUDED_SHIELDED"
+    EXCLUDED_RETENTION = "EXCLUDED_RETENTION"
     ANSWERED = "ANSWERED"
     DISMISSED = "DISMISSED"
     SAVED_FOR_LATER = "SAVED_FOR_LATER"
@@ -152,7 +156,7 @@ class LiveMessageRecord(Base):
     super_chat_tier: Mapped[int | None] = mapped_column(Integer, nullable=True)
     content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+    first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False, index=True)
     last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
 
 
@@ -501,9 +505,10 @@ def ingest_live_message(
     if existing is not None:
         if existing.session_id != incoming.session_id:
             raise ValueError("message_id already exists under a different session")
-        if existing.content_hash != digest:
+        if existing.text != LIVE_MESSAGE_TEXT_EXPIRED and existing.content_hash != digest:
             # Live messages should be immutable. Update the stored text to
             # prevent stale content being submitted on a still-pending task.
+            # An expired body must never be restored by listener replay/edit.
             existing.text = incoming.text
             existing.content_hash = digest
         if incoming.is_super_chat:

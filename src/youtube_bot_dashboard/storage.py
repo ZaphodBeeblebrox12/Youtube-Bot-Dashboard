@@ -145,6 +145,11 @@ def create_schema(engine: Engine) -> None:
 
     Base.metadata.create_all(engine)
 
+    # Ensure the retention query index also exists in databases created before
+    # the index was added to LiveMessageRecord.
+    for index in _live_queue.LiveMessageRecord.__table__.indexes:
+        index.create(engine, checkfirst=True)
+
     # Compatibility migration for SQLite databases that predate the source field.
     if engine.dialect.name == "sqlite":
         columns = {column["name"] for column in inspect(engine).get_columns("live_sessions")}

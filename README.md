@@ -6,6 +6,13 @@ A private, local-first livestream co-pilot with a curated answer queue, low-nois
 
 - Easy questions receive no AI hint, answer angle, or drafted response. Medium and Hard questions receive a concise AI hint plus a separate two-sentence spoken response; malformed outputs are flagged for review.
 
+## Live-message text retention
+
+- Settings provides a 0–365 day retention dial for live-chat message text. **0 means keep indefinitely.**
+- For a positive window, raw live-message text older than the chosen number of days is redacted automatically when the live worker starts and then hourly. Settings also provides an immediate manual cleanup action.
+- The operation scrubs the expired message's text from persisted AI request payloads and excludes pending/retryable/in-flight tasks for that expired content. It retains message IDs/metadata, completed AI task results, moderation history, community viewer profiles, approved memory summaries, and historical-video comment records.
+- This retention dial is specifically for the `live_messages` live-chat stream, not the separate `comments` / `comment_text_versions` historical-video cleanup store. Rows are redacted rather than deleted so stable foreign keys and saved-memory links survive.
+
 ## Safety levers
 
 - **Lever 1 — Session Shield:** once a viewer is shielded, subsequent messages are excluded before both moderation and Reply Finder AI calls for the remainder of that livestream session. Requests already dispatched cannot be recalled; completed moderation records that triggered the shield remain in the audit trail. This is an internal AI-input filter, not a YouTube ban, timeout, or mute action.

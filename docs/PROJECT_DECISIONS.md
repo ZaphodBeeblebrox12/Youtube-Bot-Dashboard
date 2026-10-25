@@ -841,3 +841,17 @@ The dashboard workspace should match the approved TradeThesis light-theme visual
 
 All cards must use live database-backed data. Do not invent live viewer counts or sample chat as if real. The default dashboard and hidden-message panels must not display raw filtered/hurtful comments; hidden panels show status/category/reason metadata only. Preserve the explicit manual unfiltered control on the Live Chat page, existing poll controls, memory approval/forget controls, and clear distinction between Session Shield and actual YouTube enforcement.
 
+
+
+## Live-message text retention control (2026-10-25)
+
+- Add a Settings slider from **0 to 365 days**; **0 means keep live-message text indefinitely**. A positive value means redact the original message body once its `first_seen_at` is older than that window.
+- Scope is raw live-chat content only. It is not a retention control for the separate historical-video `comments` / `comment_text_versions` tables.
+- Redact expired text in the `live_messages` row and remove matching message entries from persisted `live_ai_request_batches.payload_json` so duplicated request payloads do not keep the message body.
+- Keep rows and stable IDs so foreign keys remain valid; retain completed AI task outputs, moderation decisions/audit state, viewer profiles/visits, approved community memory summaries, Super Chat metadata, and other workspaces. The memory/source row remains linked but its original raw text is gone.
+- Tasks that have not completed (pending, batched, sent/in-flight, or retryable) when their source content expires are marked `EXCLUDED_RETENTION` and are not retried or re-persisted from a late provider response. Remove expired items from prepared batches before dispatch; cancel an emptied prepared batch.
+- Cleanup runs at worker startup and hourly. Settings also includes “Run message cleanup now” for immediate enforcement of the saved setting.
+- Use `first_seen_at` (time received by this application), not untrusted source timestamps, as the retention clock. Index it for cleanup queries.
+- The cleanup is transaction-based and must fail closed on malformed stored batch payloads. Existing content hashes/metadata remain for deduplication/audit.
+- This policy stops retaining old raw bodies; database files may reuse freed pages without shrinking their physical file size. SQLite/PostgreSQL compaction is a separate maintenance action, not part of this dial.
+

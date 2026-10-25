@@ -40,6 +40,12 @@ from youtube_bot_dashboard.live_queue import (
     update_live_queue_config,
 )
 from youtube_bot_dashboard.storage import create_engine_and_sessions, create_schema
+from youtube_bot_dashboard.live_queue import LIVE_MESSAGE_TEXT_EXPIRED
+from youtube_bot_dashboard.message_retention import (
+    get_live_message_retention_days,
+    save_live_message_retention_days,
+    run_live_message_retention_cleanup,
+)
 from youtube_bot_dashboard.providers.registry import ProviderRegistry
 from youtube_bot_dashboard.live_polls import (
     POLL_ACTIVE,
@@ -181,6 +187,7 @@ def load_dashboard_snapshot():
                 message.user_channel_id
                 and (message.session_id, message.user_channel_id) in active_shield_keys
             )
+            content_expired = message.text == LIVE_MESSAGE_TEXT_EXPIRED
             approved, reason = is_ai_whitelisted_for_display(
                 moderation_state=moderation_task.state if moderation_task else None,
                 moderation_result=moderation_result,
@@ -188,6 +195,9 @@ def load_dashboard_snapshot():
                 reply_finder_result=reply_result,
                 is_super_chat=message.is_super_chat,
             )
+            if content_expired:
+                approved = False
+                reason = "Message body removed by the live-message retention policy."
             if is_shielded:
                 approved = False
                 reason = "Viewer is excluded by Session Shield."
@@ -197,7 +207,8 @@ def load_dashboard_snapshot():
                 "session_id": message.session_id,
                 "user_id": message.user_channel_id,
                 "username": message.username or "Unknown viewer",
-                "text": message.text,
+                "text": "" if content_expired else message.text,
+                "content_expired": content_expired,
                 "published_at": published_at,
                 "time_label": published_at.strftime("%H:%M") if published_at else "Time unknown",
                 "is_super_chat": bool(message.is_super_chat),
@@ -859,8 +870,57 @@ elif page == "Settings":
             st.error(f"Settings were not saved: {exc}")
 
     st.divider()
+    st.subheader("Live-message text retention")
+    st.caption(
+        "This controls raw chat-message content only. It does not delete AI task results, "
+        "moderation decisions, member profiles, approved memories, or historical-video comments."
+    )
+    with db_session() as session:
+        saved_retention_days = get_live_message_retention_days(session)
+    with st.form("live_message_retention_settings"):
+        retention_days = st.slider(
+            "Keep live-message text for (days)",
+            min_value=0,
+            max_value=365,
+            value=saved_retention_days,
+            step=1,
+            help="0 keeps message text indefinitely. A value from 1 to 365 removes message bodies older than that many days.",
+        )
+        if retention_days == 0:
+            st.caption("Current choice: keep message text indefinitely.")
+        else:
+            st.caption(
+                f"Current choice: retain raw message text for {retention_days} day(s). "
+                "Older content will be redacted automatically by the worker, and old batch payload copies will be scrubbed."
+            )
+        save_retention = st.form_submit_button("Save retention policy", type="primary")
+    if save_retention:
+        try:
+            with db_session() as session:
+                save_live_message_retention_days(session, retention_days)
+                session.commit()
+            st.success("Live-message retention policy saved.")
+            st.rerun()
+        except ValueError as exc:
+            st.error(str(exc))
+
+    st.caption(
+        "The worker checks retention on startup and then hourly. The action below runs the saved policy immediately."
+    )
+    if st.button("Run message cleanup now", key="run-live-message-retention", use_container_width=True):
+        try:
+            summary = run_live_message_retention_cleanup(SessionFactory)
+            st.success(
+                f"Cleanup finished · {summary['expired_messages']} message body/bodies redacted · "
+                f"{summary['scrubbed_batch_payloads']} batch payload(s) scrubbed · "
+                f"{summary['excluded_tasks']} pending task(s) excluded."
+            )
+        except Exception as exc:
+            st.error(f"Message cleanup failed; no success is assumed: {exc}")
+
+    st.divider()
     st.subheader("Not yet configurable here")
-    st.write("AI API keys/model IDs, prompt caching, provider-specific token counting and cleanup schedule will be added with their adapters and background worker.")
+    st.write("AI API keys/model IDs, prompt caching, provider-specific token counting and the separate historical-video cleanup scheduler are not yet configurable here.")
     st.caption("Keep Gemini and Qwen credentials in environment variables or secret storage, never in these ordinary settings fields.")
     st.code("python -m youtube_bot_dashboard.live_worker", language="bash")
     st.caption("Run the worker as a separate background process after setting DATABASE_URL and the selected provider's credentials/model environment variables. For direct YouTube intake, configure the OAuth Desktop client, run python -m youtube_bot_dashboard.youtube_auth, then python -m youtube_bot_dashboard.youtube_listener. Real-broadcast verification is still pending.")
@@ -944,6 +1004,7 @@ elif page == "Live Chat":
                 message.user_channel_id
                 and (message.session_id, message.user_channel_id) in active_shield_keys
             )
+            content_expired = message.text == LIVE_MESSAGE_TEXT_EXPIRED
             approved, reason = is_ai_whitelisted_for_display(
                 moderation_state=moderation_task.state if moderation_task else None,
                 moderation_result=moderation_result,
@@ -951,13 +1012,17 @@ elif page == "Live Chat":
                 reply_finder_result=reply_result,
                 is_super_chat=message.is_super_chat,
             )
+            if content_expired:
+                approved = False
+                reason = "Message body removed by the live-message retention policy."
             if is_shielded:
                 approved = False
                 reason = "Viewer is currently excluded by Session Shield."
             feed_items.append({
                 "message_id": message.message_id,
                 "username": message.username or "Unknown viewer",
-                "text": message.text,
+                "text": "" if content_expired else message.text,
+                "content_expired": content_expired,
                 "published_at": message.published_at or message.first_seen_at,
                 "is_super_chat": bool(message.is_super_chat),
                 "super_chat_amount": super_chat_amount_label(message) if message.is_super_chat else None,
@@ -1000,7 +1065,10 @@ elif page == "Live Chat":
                 st.markdown(f"**{item['username']}** · {message_time}")
                 if item["is_super_chat"]:
                     st.markdown(f"**💛 SUPER CHAT · {item['super_chat_amount']} · PRIORITY**")
-                st.write(item["text"])
+                if item.get("content_expired"):
+                    st.caption("Message body removed by retention policy; metadata and AI decisions are retained.")
+                elif item["text"]:
+                    st.write(item["text"])
                 if show_unfiltered:
                     if item["approved"]:
                         st.caption("AI-whitelisted · safety cleared and selected as useful/constructive")
@@ -1098,6 +1166,7 @@ elif page == "Reply Queue":
             .where(
                 LiveMessageTask.pipeline == LivePipeline.REPLY_FINDER.value,
                 LiveMessageTask.state == TaskState.COMPLETED.value,
+                LiveMessageRecord.text != LIVE_MESSAGE_TEXT_EXPIRED,
             )
             .order_by(LiveMessageRecord.is_super_chat.desc(), LiveMessageTask.completed_at.asc())
             .limit(250)

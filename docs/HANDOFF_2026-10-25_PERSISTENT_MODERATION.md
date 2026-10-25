@@ -223,3 +223,14 @@ Run focused tests first, then full CI. Test against the fake YouTube service; re
 - AI whitelist display policy: https://github.com/ZaphodBeeblebrox12/Youtube-Bot-Dashboard/blob/main/src/youtube_bot_dashboard/chat_visibility.py
 - Live Chat / Reply Queue UI: https://github.com/ZaphodBeeblebrox12/Youtube-Bot-Dashboard/blob/main/app.py
 - Last green test run at code checkpoint: https://github.com/ZaphodBeeblebrox12/Youtube-Bot-Dashboard/actions/runs/40130179648
+
+
+## 3E. Live-message text retention in Settings
+
+- Settings has a 0–365 day slider; **0 = retain live-message text indefinitely**. Positive values redact content older than N days, measured from app `first_seen_at`.
+- Apply this to live-chat raw message bodies and their persisted copies in AI batch `payload_json`, not the separate historical-video comment-cleanup tables.
+- Preserve metadata rows, completed AI results, moderation/audit state, member profiles/visits, approved memories, and Super Chat metadata. Redact instead of deleting message rows so foreign keys and memory links survive.
+- Pending, batched, sent/in-flight and retryable tasks whose message body expires must become `EXCLUDED_RETENTION`; late provider results must not restore or resurface those expired messages. Remove entries from prepared batches and cancel a prepared batch when all inputs expire.
+- Worker performs cleanup at startup and hourly; Settings offers “Run message cleanup now.” Index `first_seen_at`, test boundary behavior and older/recent messages mixed in one stored payload.
+- This is a content-retention policy; actual disk-file shrink/compaction (e.g. SQLite VACUUM) remains separate.
+
