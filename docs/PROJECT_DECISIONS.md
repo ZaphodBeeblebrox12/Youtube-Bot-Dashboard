@@ -851,3 +851,17 @@ Every element in the live reading view must pass this test: does it help the cre
 
 This section captures an explicit owner requirement. Do not remove or reinterpret it in future redesigns. Before changing the default feed, membership/returning-viewer indicators, scroll anchoring, or community-memory context, inspect this decision and ask before overriding it.
 
+## Community memory retention limit — explicit owner decision (2026-10-25)
+
+**Retention is limited to three days.** This is a storage-control requirement, not a suggestion.
+
+- AI-proposed memory suggestions and owner-saved community memories expire and are deleted after three days from their original creation time. Saving or viewing a memory does not extend its retention lifetime.
+- Viewer visit history and profile records are retained for a rolling three-day activity window. A viewer profile with no activity during that window is deleted along with its visit records and associated memories.
+- For active viewers, distinct-stream and message-count summaries are recomputed from visits within the three-day window. Do not claim lifetime visit counts or display an older first-seen date when that information has aged out.
+- The default live feed and Community Memory workspace must not display expired memories or stale viewer history even if an expired row has not yet been physically purged.
+- Purge expired data during normal community-data activity and when the Community Memory workspace is opened. Keep cleanup bounded/throttled during live ingestion; do not run expensive full-table cleanup for every individual incoming message.
+- Returning-viewer and member labels remain separate. Membership is shown only when source metadata supplied it; returning status requires a stable source channel ID and at least two distinct sessions retained inside the three-day window.
+- This policy reduces the lifetime of saved personal context and bounds profile/visit storage. Do not lengthen retention or quietly persist old summaries in another table without explicit owner approval.
+
+Implementation checkpoint: community_memory.py exposes purge_expired_community_data, expires saved and pending memories, prunes profiles inactive for three days, trims visit rows, and recomputes active profile counters from the rolling window. The Streamlit live feed filters expired memory/profile data and states the three-day limit. Unit tests cover expiration and rolling history. CI must be checked after the branch's latest commit.
+
