@@ -15,7 +15,9 @@ class ProviderRegistry:
         providers: dict[ProviderName, AIProvider] = {}
         # Import lazily so installations without optional SDKs can still run
         # the dashboard and tests without AI credentials.
+        from youtube_bot_dashboard.providers.deepseek import DeepSeekProvider
         from youtube_bot_dashboard.providers.gemini import GeminiProvider
+        from youtube_bot_dashboard.providers.kimi import KimiProvider
         from youtube_bot_dashboard.providers.qwen import QwenProvider
 
         try:
@@ -26,10 +28,19 @@ class ProviderRegistry:
             providers[ProviderName.QWEN] = QwenProvider()
         except ProviderError:
             pass
+        try:
+            providers[ProviderName.DEEPSEEK] = DeepSeekProvider()
+        except ProviderError:
+            pass
+        try:
+            providers[ProviderName.KIMI] = KimiProvider()
+        except ProviderError:
+            pass
         return cls(providers)
 
     def available(self) -> tuple[ProviderName, ...]:
-        return tuple(provider for provider in (ProviderName.GEMINI, ProviderName.QWEN) if provider in self._providers)
+        order = (ProviderName.GEMINI, ProviderName.QWEN, ProviderName.DEEPSEEK, ProviderName.KIMI)
+        return tuple(provider for provider in order if provider in self._providers)
 
     def get(self, provider: ProviderName) -> AIProvider:
         adapter = self._providers.get(provider)
