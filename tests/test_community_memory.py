@@ -258,3 +258,36 @@ def test_viewer_profile_and_visit_history_expire_after_three_days_inactive():
             )) == 0
     finally:
         engine.dispose()
+
+
+def test_viewer_return_after_retention_window_starts_fresh_history():
+    engine, factory = setup_db()
+    try:
+        now = datetime.now(timezone.utc)
+        stale_time = now - timedelta(days=4)
+        with factory() as session:
+            record_viewer_activity(
+                session, user_channel_id="returning-after-expiry", display_name="Asha",
+                session_id="s1", observed_at=stale_time,
+            )
+            session.commit()
+
+        with factory() as session:
+            record_viewer_activity(
+                session, user_channel_id="returning-after-expiry", display_name="Asha",
+                session_id="s2", observed_at=now,
+            )
+            session.commit()
+
+        with factory() as session:
+            profile = session.get(CommunityViewerProfile, "returning-after-expiry")
+            visits = list(session.scalars(select(CommunityViewerVisit).where(
+                CommunityViewerVisit.user_channel_id == "returning-after-expiry"
+            )))
+            assert profile is not None
+            assert profile.distinct_sessions_seen == 1
+            assert profile.total_message_count == 1
+            assert len(visits) == 1
+            assert visits[0].session_id == "s2"
+    finally:
+        engine.dispose()
