@@ -1607,12 +1607,105 @@ elif page == "Analytics":
     y.metric("Approved / shown", len(dashboard["shown_items"]))
     z.metric("Filtered / hidden", len(dashboard["hidden_items"]))
     st.markdown("#### AI providers")
-    provider_columns = st.columns(2)
-    for column, provider in zip(provider_columns, [ProviderName.GEMINI, ProviderName.QWEN]):
+    provider_columns = st.columns(4)
+    all_providers = (
+        ProviderName.GEMINI,
+        ProviderName.QWEN,
+        ProviderName.DEEPSEEK,
+        ProviderName.KIMI,
+    )
+    for column, provider in zip(provider_columns, all_providers):
         if provider_registry.has(provider):
             column.success(f"{provider.value.title()} configured")
             column.caption(f"Model: {provider_registry.get(provider).model_id}")
         else:
             column.warning(f"{provider.value.title()} not configured")
+
+    st.divider()
+    st.markdown("#### Provider performance")
+    period = st.selectbox(
+        "Reporting window",
+        options=["Last 24 hours", "Last 7 days", "Last 30 days", "All time"],
+        index=1,
+        key="provider_analytics_period",
+    )
+    period_delta = {
+        "Last 24 hours": timedelta(hours=24),
+        "Last 7 days": timedelta(days=7),
+        "Last 30 days": timedelta(days=30),
+    }.get(period)
+    since = datetime.now(timezone.utc) - period_delta if period_delta is not None else None
+    with db_session() as session:
+        provider_report = get_provider_analytics(session, since=since)
+
+    def format_metric(value, suffix=""):
+        return "—" if value is None else f"{value}{suffix}"
+
+    def format_seconds(value):
+        return "—" if value is None else f"{value:.2f}s"
+
+    def format_cost(value):
+        return "Not priced" if value is None else f"${value:.6f}"
+
+    summary_rows = []
+    for item in provider_report["providers"]:
+        coverage = (
+            f'{item["cost_covered_requests"]}/{item["requests"]}'
+            if item["cost_covered_requests"] else "Not priced"
+        )
+        summary_rows.append({
+            "Provider": item["provider"].title(),
+            "Requests": item["requests"],
+            "Success rate": format_metric(
+                None if item["success_rate_percent"] is None else round(item["success_rate_percent"], 1),
+                "%",
+            ),
+            "Failures": item["failed_requests"],
+            "In flight": item["in_flight_requests"],
+            "Avg latency": format_seconds(item["average_latency_seconds"]),
+            "P95 latency": format_seconds(item["p95_latency_seconds"]),
+            "Input tokens": item["input_tokens"],
+            "Output tokens": item["output_tokens"],
+            "Cache-hit tokens": item["cached_input_tokens"],
+            "Cache-write tokens": item["cache_write_tokens"],
+            "Cache-hit rate": format_metric(
+                None if item["cache_hit_rate_percent"] is None else round(item["cache_hit_rate_percent"], 1),
+                "%",
+            ),
+            "Estimated cost": format_cost(item["cost_estimate_usd"]),
+            "Priced calls": coverage,
+        })
+    st.dataframe(summary_rows, hide_index=True, use_container_width=True)
+    st.caption(
+        "Latency is measured from dispatch to response. Cache metrics are shown only when the provider reports them. "
+        "Costs use the saved model-specific USD rate card; when cache usage is not reported, all input tokens are priced as uncached."
+    )
+
+    if provider_report["by_pipeline"]:
+        st.markdown("##### Moderation vs. Reply Finder")
+        pipeline_rows = []
+        for item in provider_report["by_pipeline"]:
+            pipeline_rows.append({
+                "Provider": item["provider"].title(),
+                "Pipeline": item["pipeline"].replace("_", " ").title(),
+                "Model": item["model"] or "Unknown",
+                "Requests": item["requests"],
+                "Failures": item["failed_requests"],
+                "Avg latency": format_seconds(item["average_latency_seconds"]),
+                "P95 latency": format_seconds(item["p95_latency_seconds"]),
+                "Input tokens": item["input_tokens"],
+                "Output tokens": item["output_tokens"],
+                "Cache-hit tokens": item["cached_input_tokens"],
+                "Cache-write tokens": item["cache_write_tokens"],
+                "Cache-hit rate": format_metric(
+                    None if item["cache_hit_rate_percent"] is None else round(item["cache_hit_rate_percent"], 1),
+                    "%",
+                ),
+                "Estimated cost": format_cost(item["cost_estimate_usd"]),
+                "Priced calls": f'{item["cost_covered_requests"]}/{item["requests"]}' if item["cost_covered_requests"] else "Not priced",
+            })
+        st.dataframe(pipeline_rows, hide_index=True, use_container_width=True)
+    else:
+        st.info("No sent provider requests match this reporting window yet. Configure providers and run test traffic to populate this comparison.")
 
 st.sidebar.caption("Database: " + ("DATABASE_URL configured" if os.environ.get("DATABASE_URL") else "local SQLite development database"))
