@@ -122,6 +122,17 @@ The prompt/backend are being refined so the AI makes two independent decisions i
 
 Do not put memory suggestions only inside each selected message. That coupling prevents a worthwhile detail from being remembered when the message isn't a good fit for today's live queue. Backend must validate candidates against exact supplied message IDs and use stable source identity, with no invented identity. Keep the one-call design, confidence threshold, memory limits, owner approval, privacy and no-auto-greeting/no-auto-posting rules. See the “Reply Finder memory independence refinement” entry in `docs/PROJECT_DECISIONS.md` for the settled decision.
 
+
+
+## 3C. Reply hints are only for Medium and Hard questions
+
+**Easy questions receive no AI hint, no answer angle, and no suggested response.** The backend must strip all three even if the model sends them. For Medium and Hard questions, provide a concise separate `ai_hint` and a `suggested_live_response` of exactly two complete sentences. The dashboard must render the hint and response only for those two difficulty levels.
+
+## 3D. Dashboard visual implementation target
+
+Implement the approved TradeThesis light-theme reference as the actual, data-backed dashboard workspace: top metrics; left workspace navigation; a safe approved-chat list with inline AI hint and two-sentence draft for Medium/Hard only; selected-message details; returning-member profile, saved memories and suggested follow-up; and lower panels for Reply Queue, recent Super Chats, filtered metadata and Session Shield. Do not fabricate viewer counts or sample messages. Hide raw content in filtered/shield summary panels, use only safe metadata there, and preserve the separate explicit unfiltered toggle on the Live Chat workspace. Keep all other existing workspaces and their action semantics intact.
+
+
 ## 4. Important gap: persistent strikes, sanctions, blacklist and enforcement
 
 Before declaring moderation complete, inspect the current source again. At the checkpoint above, there is a `SessionShieldRecord`, but no complete persistent offence/strike/sanction domain model and policy engine implementing the agreed escalation ladder. The current repository also does not yet carry out the full authorized YouTube enforcement workflow.

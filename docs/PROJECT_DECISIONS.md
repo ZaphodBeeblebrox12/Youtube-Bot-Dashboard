@@ -823,3 +823,21 @@ The user confirmed the intended behavior: Reply Finder must protect the host's a
 - Keep the existing single AI pass, one pending suggestion and two saved memories per viewer, private owner approval, forget controls, and no auto-posting/greeting.
 - This change does not alter the separate Moderation classifier, Session Shield, strike policy, or sanction enforcement.
 
+
+
+## Reply hints by question difficulty (2026-10-25)
+
+The Reply Finder's visible help is difficulty-dependent:
+- **EASY:** no AI hint, answer angle, or drafted response. The host already knows enough to answer; do not add AI-generated filler or a disguised hint in another field. Backend normalization must strip these fields even if the provider returns them.
+- **MODERATE / DIFFICULT:** provide a concise `ai_hint` with the important point(s) to cover, plus a separate `suggested_live_response` containing exactly two complete spoken-English sentences. Mark a missing/invalid hint or sentence-count failure for review.
+- The dashboard must reflect the same rule: no AI hint/response card for Easy items; show the hint and two-sentence draft only for Medium/Hard. This is a private host aid and must never auto-post.
+- AI selection reasoning is an internal explanation, not a replacement answer hint. Continue to treat unverified/current facts carefully and flag research-dependent questions.
+
+
+
+## Live dashboard visual implementation target (2026-10-25)
+
+The dashboard workspace should match the approved TradeThesis light-theme visual concept: compact top metrics for live/offline state, chat messages, approved/shown, filtered/hidden, Super Chats and returning members; a left navigation rail; an approved live chat with inline AI hints and draft responses for Medium/Hard only; selected-message details and member history with approved memories/follow-up; and four compact lower panels for Reply Queue, recent Super Chats, filtered-message metadata and Shield status.
+
+All cards must use live database-backed data. Do not invent live viewer counts or sample chat as if real. The default dashboard and hidden-message panels must not display raw filtered/hurtful comments; hidden panels show status/category/reason metadata only. Preserve the explicit manual unfiltered control on the Live Chat page, existing poll controls, memory approval/forget controls, and clear distinction between Session Shield and actual YouTube enforcement.
+

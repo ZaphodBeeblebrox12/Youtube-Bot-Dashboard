@@ -6,6 +6,9 @@ def test_reply_finder_requires_two_sentences_for_medium_and_hard():
     assert "MODERATE or DIFFICULT questions" in REPLY_FINDER_SYSTEM_PROMPT
     assert "exactly TWO complete sentences" in REPLY_FINDER_SYSTEM_PROMPT
     assert '"suggested_live_response"' in REPLY_FINDER_SYSTEM_PROMPT
+    assert '"ai_hint"' in REPLY_FINDER_SYSTEM_PROMPT
+    assert "For EASY questions, provide NO AI hint" in REPLY_FINDER_SYSTEM_PROMPT
+    assert "exactly TWO complete sentences" in REPLY_FINDER_SYSTEM_PROMPT
 
 
 def test_reply_finder_labels_stance_and_does_not_guess_from_tone():

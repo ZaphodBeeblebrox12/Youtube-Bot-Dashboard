@@ -109,60 +109,471 @@ def read_counts(session):
     return total_messages, total_tasks, pending, total_batches
 
 
-st.title("YouTube Bot Dashboard")
-st.caption("Private live-stream control room · Local-first preparation build")
+
+def _task_result(task):
+    if task is None:
+        return {}
+    try:
+        result = json.loads(task.result_json or "{}")
+    except (TypeError, json.JSONDecodeError):
+        return {}
+    return result if isinstance(result, dict) else {}
+
+
+def load_dashboard_snapshot():
+    """Load a real, safe dashboard snapshot; hidden message bodies never enter hidden panels."""
+    with db_session() as session:
+        total_messages, total_tasks, pending_tasks, total_batches = read_counts(session)
+        active_sessions = list(session.scalars(
+            select(LiveSessionRecord)
+            .where(LiveSessionRecord.status == "ACTIVE")
+            .order_by(LiveSessionRecord.started_at.desc())
+        ))
+        session_ids = [row.session_id for row in active_sessions]
+        if not session_ids:
+            latest_id = session.scalar(
+                select(LiveMessageRecord.session_id)
+                .order_by(LiveMessageRecord.last_seen_at.desc())
+                .limit(1)
+            )
+            session_ids = [latest_id] if latest_id else []
+
+        message_query = select(LiveMessageRecord)
+        if session_ids:
+            message_query = message_query.where(LiveMessageRecord.session_id.in_(session_ids))
+        else:
+            message_query = message_query.where(LiveMessageRecord.message_id == "__no_messages__")
+        messages = list(session.scalars(
+            message_query.order_by(
+                LiveMessageRecord.is_super_chat.desc(),
+                LiveMessageRecord.first_seen_at.desc(),
+            ).limit(250)
+        ))
+        tasks_by_key = {}
+        if messages:
+            tasks = list(session.scalars(
+                select(LiveMessageTask).where(
+                    LiveMessageTask.message_id.in_([message.message_id for message in messages])
+                )
+            ))
+            tasks_by_key = {(task.message_id, task.pipeline): task for task in tasks}
+
+        active_shield_keys = {
+            (row[0], row[1])
+            for row in session.execute(
+                select(SessionShieldRecord.session_id, SessionShieldRecord.user_channel_id)
+                .join(LiveSessionRecord, LiveSessionRecord.session_id == SessionShieldRecord.session_id)
+                .where(
+                    SessionShieldRecord.active.is_(True),
+                    LiveSessionRecord.status == "ACTIVE",
+                )
+            ).all()
+        }
+
+        feed_items = []
+        for message in messages:
+            moderation_task = tasks_by_key.get((message.message_id, LivePipeline.MODERATION.value))
+            reply_task = tasks_by_key.get((message.message_id, LivePipeline.REPLY_FINDER.value))
+            moderation_result = _task_result(moderation_task)
+            reply_result = _task_result(reply_task)
+            is_shielded = bool(
+                message.user_channel_id
+                and (message.session_id, message.user_channel_id) in active_shield_keys
+            )
+            approved, reason = is_ai_whitelisted_for_display(
+                moderation_state=moderation_task.state if moderation_task else None,
+                moderation_result=moderation_result,
+                reply_finder_state=reply_task.state if reply_task else None,
+                reply_finder_result=reply_result,
+                is_super_chat=message.is_super_chat,
+            )
+            if is_shielded:
+                approved = False
+                reason = "Viewer is excluded by Session Shield."
+            published_at = message.published_at or message.first_seen_at
+            feed_items.append({
+                "message_id": message.message_id,
+                "session_id": message.session_id,
+                "user_id": message.user_channel_id,
+                "username": message.username or "Unknown viewer",
+                "text": message.text,
+                "published_at": published_at,
+                "time_label": published_at.strftime("%H:%M") if published_at else "Time unknown",
+                "is_super_chat": bool(message.is_super_chat),
+                "super_chat_amount": super_chat_amount_label(message) if message.is_super_chat else None,
+                "is_shielded": is_shielded,
+                "approved": bool(approved),
+                "reason": reason,
+                "category": moderation_result.get("category", "PENDING"),
+                "moderation_state": moderation_task.state if moderation_task else "MISSING",
+                "reply_state": reply_task.state if reply_task else "MISSING",
+                "reply_result": reply_result,
+                "reply_task_id": reply_task.id if reply_task else None,
+                "priority": reply_result.get("priority", "NORMAL"),
+                "ease": reply_result.get("ease_to_answer", "EASY"),
+                "ai_hint": reply_result.get("ai_hint"),
+                "answer": reply_result.get("suggested_live_response"),
+                "answer_validation": reply_result.get("answer_validation", "NOT_CHECKED"),
+                "hint_validation": reply_result.get("hint_validation", "NOT_CHECKED"),
+                "needs_research": bool(reply_result.get("needs_research", False)),
+                "selection_reason": reply_result.get("selection_reason", ""),
+                "question_type": reply_result.get("question_type", "UNCLEAR"),
+            })
+
+        shown_items = [item for item in feed_items if item["approved"]]
+        hidden_items = [item for item in feed_items if not item["approved"]]
+        queue_items = [
+            item for item in shown_items
+            if item["reply_state"] == TaskState.COMPLETED.value
+            and item["reply_result"].get("selected") is True
+        ]
+        queue_items.sort(key=lambda item: (
+            not item["is_super_chat"],
+            {"HIGH": 0, "NORMAL": 1, "LOW": 2}.get(item["priority"], 1),
+            str(item["published_at"] or ""),
+        ))
+        super_chats = [item for item in shown_items if item["is_super_chat"]]
+        shield_rows = session.execute(
+            select(SessionShieldRecord, LiveSessionRecord)
+            .join(LiveSessionRecord, LiveSessionRecord.session_id == SessionShieldRecord.session_id)
+            .where(
+                SessionShieldRecord.active.is_(True),
+                LiveSessionRecord.status == "ACTIVE",
+            )
+            .order_by(SessionShieldRecord.created_at.desc())
+        ).all()
+        shields = [{
+            "id": shield.id,
+            "username": shield.display_name or "Unknown viewer",
+            "user_id": shield.user_channel_id,
+            "session_id": shield.session_id,
+            "category": (shield.reason or "Session Shield").split(";")[0].replace("Session Shield suggestion: ", ""),
+            "confidence": shield.confidence,
+            "created_at": shield.created_at,
+        } for shield, _live_session in shield_rows]
+
+        profile_count = session.scalar(select(func.count()).select_from(CommunityViewerProfile)) or 0
+        returning_count = session.scalar(
+            select(func.count()).select_from(CommunityViewerProfile).where(
+                CommunityViewerProfile.distinct_sessions_seen >= 2
+            )
+        ) or 0
+        returning_member_count = session.scalar(
+            select(func.count()).select_from(CommunityViewerProfile).where(
+                CommunityViewerProfile.distinct_sessions_seen >= 2,
+                CommunityViewerProfile.is_member.is_(True),
+            )
+        ) or 0
+
+        lead = queue_items[0] if queue_items else (shown_items[0] if shown_items else None)
+        lead_profile = None
+        lead_memories = []
+        if lead and lead["user_id"]:
+            lead_profile_row = session.get(CommunityViewerProfile, lead["user_id"])
+            all_saved_memories = list(session.scalars(
+                select(CommunityMemory).where(
+                    CommunityMemory.user_channel_id == lead["user_id"],
+                    CommunityMemory.status == "SAVED",
+                ).order_by(CommunityMemory.created_at.desc()).limit(2)
+            ))
+            lead_memories = [
+                {
+                    "id": memory.id,
+                    "summary": memory.summary,
+                    "follow_up": memory.suggested_follow_up,
+                    "type": memory.memory_type.title(),
+                    "created_at": memory.reviewed_at or memory.created_at,
+                    "unused": memory.last_used_session_id != lead["session_id"],
+                }
+                for memory in all_saved_memories
+            ]
+            if lead_profile_row:
+                lead_profile = {
+                    "display_name": lead_profile_row.display_name or lead["username"],
+                    "handle": lead_profile_row.user_channel_id,
+                    "is_member": lead_profile_row.is_member,
+                    "distinct_sessions_seen": lead_profile_row.distinct_sessions_seen,
+                    "message_count": lead_profile_row.message_count,
+                    "first_seen_at": lead_profile_row.first_seen_at,
+                }
+
+        return {
+            "total_messages": total_messages,
+            "total_tasks": total_tasks,
+            "pending_tasks": pending_tasks,
+            "total_batches": total_batches,
+            "active": bool(active_sessions),
+            "session_label": "active stream" if active_sessions else "most recent stream",
+            "current_session_count": len(messages),
+            "shown_items": shown_items,
+            "hidden_items": hidden_items,
+            "queue_items": queue_items,
+            "super_chats": super_chats,
+            "shields": shields,
+            "profile_count": profile_count,
+            "returning_count": returning_count,
+            "returning_member_count": returning_member_count,
+            "lead": lead,
+            "lead_profile": lead_profile,
+            "lead_memories": lead_memories,
+        }
+
+
+def _navigate_to(destination):
+    st.session_state["workspace_nav"] = destination
+
+
+st.markdown(
+    """
+    <style>
+      .block-container {padding-top: .65rem; padding-bottom: 1rem; max-width: 1900px;}
+      [data-testid="stSidebar"] {background: #f5f7fb; border-right: 1px solid #e1e7f0;}
+      [data-testid="stMetric"] {background: #fff; border: 1px solid #e2e8f0; padding: .55rem .7rem; border-radius: 12px;}
+      [data-testid="stMetricLabel"] {font-size: .75rem; color: #52627b;}
+      [data-testid="stMetricValue"] {font-size: 1.35rem; color: #14213b;}
+      [data-testid="stVerticalBlockBorderWrapper"] {border-color: #e1e7f0; border-radius: 14px; background: #fff;}
+      div.stButton > button {border-radius: 9px; font-weight: 600; min-height: 2.15rem;}
+      [data-testid="stAppViewContainer"] {background: #f7f9fc;}
+      .tt-brand {padding: .25rem .35rem .5rem 0; color: #14213b; line-height: 1.2;}
+      .tt-brand strong {font-size: 1.45rem; letter-spacing: -.04em;}
+      .tt-brand span {display: block; font-size: .82rem; color: #64748b; margin-top: .18rem;}
+      .tt-muted {color: #687991; font-size: .83rem;}
+      .tt-tag {display: inline-block; border-radius: 999px; padding: .15rem .48rem; font-size: .72rem; font-weight: 650; margin-right: .2rem;}
+      .tt-blue {background: #e4efff; color: #1656bd;}
+      .tt-green {background: #dff7ea; color: #11683d;}
+      .tt-purple {background: #eee8ff; color: #6039bf;}
+      .tt-red {background: #ffe4e4; color: #aa2424;}
+      .tt-amber {background: #fff1cb; color: #905200;}
+      .tt-chat-copy {font-size: .98rem; line-height: 1.45; color: #17253e;}
+      div[data-testid="stHorizontalBlock"] {gap: .8rem;}
+      @media (max-width: 900px) {
+        .block-container {padding-left: .7rem; padding-right: .7rem;}
+        [data-testid="stMetricValue"] {font-size: 1rem;}
+      }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+dashboard = load_dashboard_snapshot()
+header = st.columns([1.65, 0.78, 0.82, 0.82, 0.82, 0.78, 0.94])
+with header[0]:
+    st.markdown(
+        '<div class="tt-brand"><strong>TradeThesis</strong><span>YouTube Live Dashboard</span></div>',
+        unsafe_allow_html=True,
+    )
+header[1].metric("Stream", "LIVE" if dashboard["active"] else "Offline")
+header[2].metric("Chat messages", dashboard["current_session_count"])
+header[3].metric("Approved / shown", len(dashboard["shown_items"]))
+header[4].metric("Filtered / hidden", len(dashboard["hidden_items"]))
+header[5].metric("Super Chats", sum(1 for item in dashboard["shown_items"] if item["is_super_chat"]))
+header[6].metric("Returning members", dashboard["returning_member_count"])
 
 with st.sidebar:
-    st.header("Moderation levers")
-    st.success("Lever 1 · Session Shield")
-    st.caption("Internal Reply Finder filter only. People remain free to chat on YouTube.")
-    st.warning("Lever 2 · Active Moderation is OFF")
-    st.caption("No YouTube bans, timeouts, mutes or deletions are connected in this version.")
+    st.markdown("## TradeThesis")
+    st.caption("Live stream control room")
+    nav_items = [
+        "Dashboard", "Live Chat", "Reply Queue", "Super Chats", "Members",
+        "Community Memory", "Filtered Messages", "Shield / Blocks", "Analytics",
+        "Live Polls", "Settings", "Past Videos Cleanup",
+    ]
     page = st.radio(
         "Workspace",
-        ["Overview", "Live Chat", "Reply Queue", "Community Memory", "Live Polls", "Settings", "Past Videos Cleanup"],
+        nav_items,
         index=0,
+        key="workspace_nav",
+        format_func=lambda value: {
+            "Dashboard": "▦  Dashboard",
+            "Live Chat": "▣  Live Chat",
+            "Reply Queue": "☷  Reply Queue",
+            "Super Chats": "＄  Super Chats",
+            "Members": "♙  Members",
+            "Community Memory": "♡  Community Memory",
+            "Filtered Messages": "⊘  Filtered Messages",
+            "Shield / Blocks": "⛨  Shield / Blocks",
+            "Analytics": "▥  Analytics",
+            "Live Polls": "▤  Live Polls",
+            "Settings": "⚙  Settings",
+            "Past Videos Cleanup": "⌫  Past Videos Cleanup",
+        }.get(value, value),
     )
+    st.divider()
+    st.caption("SESSION SHIELD")
+    st.success("Internal AI-input filter ready")
+    st.caption("Active YouTube bans/mutes/timeouts are not enabled.")
+    st.caption("Database: " + ("DATABASE_URL configured" if os.environ.get("DATABASE_URL") else "local SQLite"))
 
-if page == "Overview":
-    with db_session() as session:
-        messages, tasks, pending, batches = read_counts(session)
-        current_config = get_live_queue_config(session)
+if page == "Dashboard":
+    st.markdown("### Live Chat <span class='tt-tag tt-green'>AI APPROVED</span>", unsafe_allow_html=True)
+    st.caption(
+        "The default stream view shows only safety-cleared, useful messages. "
+        "Filtered message bodies stay hidden; Super Chats retain priority only after safety clearance."
+    )
+    chat_col, detail_col = st.columns([2.2, 1.0], gap="medium")
+    with chat_col:
+        st.markdown("#### Live conversation")
+        st.caption(f"Recent approved messages · {dashboard['session_label']} · Super Chats first")
+        if not dashboard["shown_items"]:
+            st.info("No messages have passed the AI safety and usefulness checks yet. No sample comments are fabricated here.")
+        for item in dashboard["shown_items"][:6]:
+            with st.container(border=True):
+                message_col, response_col = st.columns([1.08, 1.0], gap="small")
+                with message_col:
+                    member_labels = []
+                    if item["user_id"]:
+                        with db_session() as session:
+                            profile_row = session.get(CommunityViewerProfile, item["user_id"])
+                            if profile_row and profile_row.is_member is True:
+                                member_labels.append("MEMBER")
+                            if profile_row and profile_row.distinct_sessions_seen >= 2:
+                                member_labels.append("RETURNING")
+                    tag_html = ""
+                    if item["is_super_chat"]:
+                        tag_html += '<span class="tt-tag tt-red">SUPER CHAT · ' + str(item["super_chat_amount"]) + '</span>'
+                    if "MEMBER" in member_labels:
+                        tag_html += '<span class="tt-tag tt-green">MEMBER</span>'
+                    if "RETURNING" in member_labels:
+                        tag_html += '<span class="tt-tag tt-purple">RETURNING</span>'
+                    st.markdown(f"**{item['username']}**  <span class='tt-muted'>{item['time_label']}</span> {tag_html}", unsafe_allow_html=True)
+                    st.write(item["text"])
+                    st.caption(
+                        f"{item['question_type'].replace('_', ' ').title()} · "
+                        f"{item['priority']} priority · {item['category']}"
+                    )
+                with response_col:
+                    if item["ease"] in {"MODERATE", "DIFFICULT"}:
+                        st.markdown(f"**{item['ease'].title()} · AI hint**")
+                        if item["ai_hint"]:
+                            st.info(item["ai_hint"])
+                        else:
+                            st.warning("The AI hint needs review before use.")
+                        st.markdown("**Suggested response · exactly 2 sentences**")
+                        if item["answer"]:
+                            st.write(item["answer"])
+                            if item["answer_validation"] == "REVIEW_REQUIRED":
+                                st.warning("Sentence-count check needs review; treat this as a draft.")
+                        else:
+                            st.warning("No two-sentence response was returned.")
+                        if item["hint_validation"] == "REVIEW_REQUIRED":
+                            st.caption("The hint is missing or needs review.")
+                        if item["needs_research"]:
+                            st.warning("Research needed before presenting current or disputed facts.")
+                    else:
+                        # UI deliberately provides no AI content for easy items.
+                        st.caption("Easy question · no AI hint or suggested response")
+                    if item["reply_task_id"] and item["reply_state"] == TaskState.COMPLETED.value and item["reply_result"].get("selected"):
+                        done_col, skip_col = st.columns(2)
+                        if done_col.button("Mark answered", key=f"dashboard-answered-{item['reply_task_id']}"):
+                            with db_session() as session:
+                                task = session.get(LiveMessageTask, item["reply_task_id"])
+                                if task and task.state == TaskState.COMPLETED.value:
+                                    task.state = TaskState.ANSWERED.value
+                                    session.commit()
+                            st.rerun()
+                        if skip_col.button("Skip", key=f"dashboard-skip-{item['reply_task_id']}"):
+                            with db_session() as session:
+                                task = session.get(LiveMessageTask, item["reply_task_id"])
+                                if task and task.state == TaskState.COMPLETED.value:
+                                    task.state = TaskState.DISMISSED.value
+                                    session.commit()
+                            st.rerun()
 
-    st.subheader("System overview")
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Messages stored", messages)
-    c2.metric("Pipeline tasks", tasks)
-    c3.metric("Pending / in-flight", pending)
-    c4.metric("Batches recorded", batches)
-
-    st.subheader("AI providers")
-    provider_columns = st.columns(2)
-    for column, provider in zip(provider_columns, [ProviderName.GEMINI, ProviderName.QWEN]):
-        if provider_registry.has(provider):
-            adapter = provider_registry.get(provider)
-            column.success(f"{provider.value.title()} configured")
-            column.caption(f"Model: {adapter.model_id}")
+    with detail_col:
+        st.markdown("#### Selected message details")
+        lead = dashboard["lead"]
+        if lead is None:
+            st.caption("A selected message and member details will appear here when an approved conversation is available.")
         else:
-            column.warning(f"{provider.value.title()} not configured")
-            column.caption("Set the provider credentials/model in environment secrets.")
+            with st.container(border=True):
+                st.markdown(f"**{lead['username']}** · {lead['time_label']}")
+                if lead["is_super_chat"]:
+                    st.markdown(f"💛 **{lead['super_chat_amount']} Super Chat**")
+                st.write(lead["text"])
+                st.caption(f"{lead['question_type'].replace('_', ' ').title()} · {lead['ease'].title()}")
+                if lead["ease"] in {"MODERATE", "DIFFICULT"}:
+                    st.markdown("**AI hint**")
+                    st.write(lead["ai_hint"] or "Hint needs review.")
+                    st.markdown("**Suggested response (2 sentences)**")
+                    st.write(lead["answer"] or "No response returned.")
+            profile = dashboard["lead_profile"]
+            st.markdown("#### Member info")
+            if profile:
+                profile_c1, profile_c2, profile_c3 = st.columns(3)
+                profile_c1.metric("Visits", profile["distinct_sessions_seen"])
+                profile_c2.metric("Messages", profile["message_count"])
+                profile_c3.metric("Memories", len(dashboard["lead_memories"]))
+                member_flag = "Member" if profile["is_member"] is True else "Membership unknown" if profile["is_member"] is None else "Not marked as member"
+                st.caption(f"{profile['display_name']} · {member_flag} · First seen {profile['first_seen_at'].strftime('%d %b %Y')}")
+                saved_memories = dashboard["lead_memories"]
+                if saved_memories:
+                    st.markdown("**Past memories**")
+                    for memory in saved_memories[:2]:
+                        st.caption(f"{memory['type']} · {memory['created_at'].strftime('%d %b %Y')}")
+                        st.write(memory["summary"])
+                    next_memory = next((memory for memory in saved_memories if memory["unused"]), None)
+                    if next_memory:
+                        with st.container(border=True):
+                            st.markdown("✨ **Suggested follow-up**")
+                            st.write(next_memory["follow_up"])
+                            if st.button("Used this follow-up", key=f"dashboard-memory-used-{next_memory['id']}"):
+                                with db_session() as session:
+                                    saved = session.get(CommunityMemory, next_memory["id"])
+                                    if saved:
+                                        from youtube_bot_dashboard.storage import utc_now
+                                        saved.last_used_at = utc_now()
+                                        saved.last_used_session_id = lead["session_id"]
+                                        session.commit()
+                                st.rerun()
+                else:
+                    st.caption("No saved memory for this viewer yet.")
+            else:
+                st.caption("No stable viewer profile is available for this message.")
 
-    st.subheader("Live queue configuration")
-    col1, col2, col3 = st.columns(3)
-    col1.metric("Batch window", f"{current_config.batch_delay_seconds:g} sec")
-    col2.metric("Max messages / batch", current_config.max_messages_per_batch)
-    col3.metric("AI request start gap", f"{current_config.minimum_request_interval_seconds:g} sec")
-    st.caption("Provider routing: " + current_config.provider_strategy.value.replace("_", " ").title())
+    st.divider()
+    panel_cols = st.columns(4, gap="small")
+    with panel_cols[0]:
+        with st.container(border=True):
+            st.markdown("**Reply Queue**")
+            st.caption(f"{len(dashboard['queue_items'])} selected")
+            for item in dashboard["queue_items"][:5]:
+                paid_tag = f" · {item['super_chat_amount']}" if item["is_super_chat"] else ""
+                st.caption(f"{item['username']}{paid_tag} · {item['time_label']}")
+            if not dashboard["queue_items"]:
+                st.caption("No selected responses waiting.")
+            st.button("View all →", key="dash-view-reply", on_click=_navigate_to, args=("Reply Queue",), use_container_width=True)
+    with panel_cols[1]:
+        with st.container(border=True):
+            st.markdown("**Recent Super Chats**")
+            st.caption(f"{len(dashboard['super_chats'])} safety-cleared")
+            for item in dashboard["super_chats"][:4]:
+                st.caption(f"{item['username']} · {item['super_chat_amount']} · {item['time_label']}")
+            if not dashboard["super_chats"]:
+                st.caption("No safety-cleared Super Chats yet.")
+            st.button("View all →", key="dash-view-super", on_click=_navigate_to, args=("Super Chats",), use_container_width=True)
+    with panel_cols[2]:
+        with st.container(border=True):
+            st.markdown("**Filtered Messages · Hidden**")
+            st.caption(f"{len(dashboard['hidden_items'])} withheld from default view")
+            for item in dashboard["hidden_items"][:4]:
+                # Intentionally display metadata only; never show hidden raw comment text here.
+                st.caption(f"{item['username']} · {item['category']} · {item['reply_state']}")
+            if not dashboard["hidden_items"]:
+                st.caption("No hidden message metadata in the recent snapshot.")
+            st.button("Review status →", key="dash-view-hidden", on_click=_navigate_to, args=("Filtered Messages",), use_container_width=True)
+    with panel_cols[3]:
+        with st.container(border=True):
+            st.markdown("**Shield Status**")
+            st.caption(f"{len(dashboard['shields'])} active session shields")
+            for shield in dashboard["shields"][:4]:
+                st.caption(f"{shield['username']} · {shield['category']}")
+            if not dashboard["shields"]:
+                st.caption("No active Session Shield filters.")
+            st.button("Manage →", key="dash-view-shield", on_click=_navigate_to, args=("Shield / Blocks",), use_container_width=True)
 
-    st.info(
-        "The read-only YouTube streamList listener and OAuth setup code are available. "
-        "Actual OAuth and live-broadcast delivery still need verification when your channel is ready; "
-        "the authenticated JSON bridge remains available."
-    )
-    st.subheader("Safety status")
-    st.write("Session Shield: ready in policy code; no public YouTube action.")
-    st.write("Active Moderation: disabled and not wired to enforcement APIs.")
-    st.write("Past Videos Cleanup: policy and incremental-storage foundations exist; YouTube connection/scheduler are not connected.")
+elif page == "Overview":
+    # Backward compatibility if an old browser session still contains the former label.
+    st.session_state["workspace_nav"] = "Dashboard"
+    st.rerun()
 
 elif page == "Live Polls":
     st.subheader("Live Polls")
@@ -782,11 +1193,8 @@ elif page == "Reply Queue":
                         st.warning("Sentence-count check needs review. Treat this as a draft, not a verified answer.")
                 else:
                     st.warning("No suggested response was produced. Skip this question or prepare an answer before responding.")
-            elif item["answer_angle"]:
-                st.markdown("**Quick answer cue**")
-                st.write(item["answer_angle"])
             else:
-                st.caption("No answer cue was provided for this easy question.")
+                st.caption("Easy question · no AI hint or suggested response")
 
             if item["needs_research"]:
                 st.warning("This question needs additional research. Do not present an unverified current or disputed fact as confirmed.")
@@ -938,5 +1346,120 @@ elif page == "Past Videos Cleanup":
     )
     st.write("Deletion mode: Preview and owner approval first.")
     st.write("Auto-delete: OFF.")
+
+
+elif page == "Super Chats":
+    st.subheader("Super Chats")
+    st.caption("Paid messages are prioritized for attention only after the same high-confidence safety clearance as other visible messages.")
+    safe_paid = dashboard["super_chats"]
+    if not safe_paid:
+        st.info("No safety-cleared Super Chats are available in the current stream snapshot.")
+    for item in safe_paid:
+        with st.container(border=True):
+            st.markdown(f"**{item['username']}** · **{item['super_chat_amount']}** · {item['time_label']}")
+            st.write(item["text"])
+            if item["ease"] in {"MODERATE", "DIFFICULT"}:
+                st.markdown("**AI hint**")
+                st.write(item["ai_hint"] or "Hint needs review.")
+                st.markdown("**Suggested response · 2 sentences**")
+                st.write(item["answer"] or "No response returned.")
+            elif item["reply_result"].get("selected") is True:
+                st.caption("Easy question · no AI hint or suggested response.")
+
+elif page == "Members":
+    st.subheader("Members & returning viewers")
+    st.caption("Profiles are matched only by stable source channel ID. Membership appears only when the source explicitly supplies it.")
+    with db_session() as session:
+        profiles = list(session.scalars(
+            select(CommunityViewerProfile).order_by(CommunityViewerProfile.last_seen_at.desc()).limit(250)
+        ))
+        profile_ids = [profile.user_channel_id for profile in profiles]
+        saved_memories = list(session.scalars(
+            select(CommunityMemory).where(
+                CommunityMemory.user_channel_id.in_(profile_ids),
+                CommunityMemory.status == "SAVED",
+            ).order_by(CommunityMemory.created_at.desc())
+        )) if profile_ids else []
+    memory_counts = {}
+    for memory in saved_memories:
+        memory_counts[memory.user_channel_id] = memory_counts.get(memory.user_channel_id, 0) + 1
+    st.metric("Viewer profiles", dashboard["profile_count"])
+    st.metric("Returning viewers", dashboard["returning_count"])
+    if profiles:
+        st.dataframe([{
+            "Viewer": profile.display_name or "Unknown viewer",
+            "Channel ID": profile.user_channel_id,
+            "Membership": "Member" if profile.is_member is True else "Not marked member" if profile.is_member is False else "Unknown",
+            "Streams seen": profile.distinct_sessions_seen,
+            "Messages recorded": profile.message_count,
+            "Saved memories": memory_counts.get(profile.user_channel_id, 0),
+            "First seen": profile.first_seen_at,
+            "Last seen": profile.last_seen_at,
+        } for profile in profiles], use_container_width=True, hide_index=True)
+    else:
+        st.info("No stable viewer profiles have been recorded yet.")
+
+elif page == "Filtered Messages":
+    st.subheader("Filtered messages · hidden by default")
+    st.caption("This view explains why messages are withheld without exposing their raw text. Use Live Chat's explicit unfiltered control only when you deliberately need manual review.")
+    st.metric("Withheld in recent snapshot", len(dashboard["hidden_items"]))
+    if dashboard["hidden_items"]:
+        for item in dashboard["hidden_items"][:100]:
+            with st.container(border=True):
+                st.markdown(f"**{item['username']}** · {item['category']}")
+                st.caption(f"Moderation: {item['moderation_state']} · Reply Finder: {item['reply_state']}")
+                st.caption("Reason: " + str(item["reason"]))
+                if item["is_shielded"]:
+                    st.caption("Session Shield active · subsequent messages excluded from both AI pipelines.")
+    else:
+        st.info("No filtered messages in the current stream snapshot.")
+
+elif page == "Shield / Blocks":
+    st.subheader("Shield / Blocks")
+    st.caption("These are internal Session Shield exclusions for the active stream, not confirmed YouTube bans, mutes, or timeouts.")
+    if dashboard["shields"]:
+        shield_map = {item["id"]: item for item in dashboard["shields"]}
+        for item in dashboard["shields"]:
+            with st.container(border=True):
+                st.markdown(f"**{item['username']}** · {item['category']}")
+                st.caption(f"Stable channel ID: {item['user_id']} · Confidence: {item['confidence'] if item['confidence'] is not None else 'not supplied'}")
+                st.caption(f"Session: {item['session_id']} · Added: {item['created_at']}")
+        selected_shield_id = st.selectbox(
+            "Choose a session shield to remove",
+            options=list(shield_map),
+            format_func=lambda shield_id: f"{shield_map[shield_id]['username']} · {shield_map[shield_id]['user_id']}",
+        )
+        if st.button("Remove Session Shield", type="primary"):
+            selected = shield_map[selected_shield_id]
+            with db_session() as session:
+                removed = unshield_user_for_session(session, session_id=selected["session_id"], user_channel_id=selected["user_id"])
+                session.commit()
+            if removed:
+                st.success("Internal filter removed for future messages in this session. Previously excluded messages are not requeued.")
+                st.rerun()
+    else:
+        st.info("No active Session Shield exclusions.")
+
+elif page == "Analytics":
+    st.subheader("Analytics")
+    st.caption("Counters describe stored application records, not live YouTube viewer counts. Viewer count is not available from the current dashboard data contract.")
+    a, b, c, d = st.columns(4)
+    a.metric("All messages stored", dashboard["total_messages"])
+    b.metric("AI tasks recorded", dashboard["total_tasks"])
+    c.metric("Pending / in-flight tasks", dashboard["pending_tasks"])
+    d.metric("AI batches recorded", dashboard["total_batches"])
+    st.markdown("#### Current stream snapshot")
+    x, y, z = st.columns(3)
+    x.metric("Checked messages", dashboard["current_session_count"])
+    y.metric("Approved / shown", len(dashboard["shown_items"]))
+    z.metric("Filtered / hidden", len(dashboard["hidden_items"]))
+    st.markdown("#### AI providers")
+    provider_columns = st.columns(2)
+    for column, provider in zip(provider_columns, [ProviderName.GEMINI, ProviderName.QWEN]):
+        if provider_registry.has(provider):
+            column.success(f"{provider.value.title()} configured")
+            column.caption(f"Model: {provider_registry.get(provider).model_id}")
+        else:
+            column.warning(f"{provider.value.title()} not configured")
 
 st.sidebar.caption("Database: " + ("DATABASE_URL configured" if os.environ.get("DATABASE_URL") else "local SQLite development database"))

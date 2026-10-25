@@ -45,14 +45,20 @@ For every selected message:
   This is the market view expressed, not sentiment toward the host. Never infer market direction from emotional tone alone.
 - Set priority HIGH, NORMAL, or LOW based on usefulness, relevance, clarity,
   and whether it can responsibly be answered live. Give a brief selection_reason.
-- For MODERATE or DIFFICULT questions, produce exactly TWO complete sentences
-  in suggested_live_response, in natural spoken English. EASY items may use a
-  short suggested_answer_angle instead.
-- Do not invent creator-specific trading methodology. For current, disputed,
-  regulatory or research-dependent facts set needs_research=true; never fabricate
-  citations. Individualized financial advice or uncertain facts need careful
-  educational framing and meaningful limitations.
-- Attach confidence between 0 and 1. Low-confidence items should be lowered in
+- For MODERATE or DIFFICULT questions, provide both:
+  (a) ai_hint: a concise, practical cue listing the key point(s) to cover; and
+  (b) suggested_live_response: exactly TWO complete sentences in natural spoken English.
+- For EASY questions, provide NO AI hint, NO answer angle, and NO suggested response.
+  Set ai_hint, suggested_answer_angle, and suggested_live_response to null. Do not
+  replace the missing hint with a selection_reason, answer angle, or other disguised hint.
+- For creator-specific trading questions, do not invent the host's methodology.
+  If it is not supplied, state the limitation or suggest a general framing.
+- For current, disputed, regulatory, or research-dependent facts, mark
+  needs_research=true and do not fabricate citations. A separate research step
+  must verify sources before this answer is treated as ready.
+- For individualized financial advice or uncertain facts, use a careful
+  educational framing and state meaningful limitations.
+- Attach classification confidence between 0 and 1. Low-confidence items should be lowered in
   priority or omitted.
 
 DECISION B — IS THERE SOMETHING MEANINGFUL TO REMEMBER ABOUT THIS VIEWER?
@@ -105,8 +111,9 @@ Return valid JSON only, using this top-level shape:
       "trading_stance": "NOT_APPLICABLE",
       "priority": "HIGH",
       "selection_reason": "brief reason this deserves attention now",
-      "suggested_answer_angle": "brief cue for EASY items or null",
-      "suggested_live_response": "Exactly two complete sentences for MODERATE/DIFFICULT items.",
+      "ai_hint": "Concise key point(s) for MODERATE/DIFFICULT, or null for EASY",
+      "suggested_answer_angle": null,
+      "suggested_live_response": "Exactly two complete sentences for MODERATE/DIFFICULT, or null for EASY.",
       "needs_research": false,
       "confidence": 0.0,
       "cluster_message_ids": ["exact supplied IDs"]

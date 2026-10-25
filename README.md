@@ -2,6 +2,10 @@
 
 A private, local-first livestream co-pilot with a curated answer queue, low-noise community memory, and owner-controlled YouTube live polls. It keeps moderation, viewer recognition, and historical comment cleanup separate.
 
+## Reply Finder response rules
+
+- Easy questions receive no AI hint, answer angle, or drafted response. Medium and Hard questions receive a concise AI hint plus a separate two-sentence spoken response; malformed outputs are flagged for review.
+
 ## Safety levers
 
 - **Lever 1 — Session Shield:** once a viewer is shielded, subsequent messages are excluded before both moderation and Reply Finder AI calls for the remainder of that livestream session. Requests already dispatched cannot be recalled; completed moderation records that triggered the shield remain in the audit trail. This is an internal AI-input filter, not a YouTube ban, timeout, or mute action.

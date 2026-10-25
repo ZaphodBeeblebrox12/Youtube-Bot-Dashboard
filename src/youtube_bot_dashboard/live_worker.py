@@ -199,6 +199,7 @@ def validate_reply_finder_output(parsed: dict, payload: dict) -> tuple[dict[str,
             cluster_ids = [message_id, *cluster_ids]
         answer = item.get("suggested_live_response")
         if item["ease_to_answer"] in {"MODERATE", "DIFFICULT"}:
+            hint = item.get("ai_hint")
             if not isinstance(answer, str):
                 item = {**item, "answer_validation": "REVIEW_REQUIRED"}
             else:
@@ -206,8 +207,22 @@ def validate_reply_finder_output(parsed: dict, payload: dict) -> tuple[dict[str,
                     **item,
                     "answer_validation": "PASS" if _sentence_count(answer) == 2 else "REVIEW_REQUIRED",
                 }
+            item = {
+                **item,
+                "hint_validation": "PASS" if isinstance(hint, str) and hint.strip() else "REVIEW_REQUIRED",
+                "suggested_answer_angle": None,
+            }
         else:
-            item = {**item, "answer_validation": "NOT_REQUIRED"}
+            # Easy items deliberately have no AI hint or drafted answer. Strip
+            # provider output here so UI/render paths cannot accidentally show one.
+            item = {
+                **item,
+                "ai_hint": None,
+                "suggested_answer_angle": None,
+                "suggested_live_response": None,
+                "hint_validation": "NOT_REQUIRED",
+                "answer_validation": "NOT_REQUIRED",
+            }
         # Preserve exact source identity, not an AI-inferred identity. Memory
         # candidates are validated separately below, including for unselected items.
         source = input_messages[message_id]

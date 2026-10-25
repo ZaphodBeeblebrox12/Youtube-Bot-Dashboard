@@ -108,6 +108,34 @@ def test_reply_finder_invalid_selected_message_is_rejected():
         )
 
 
+def test_easy_reply_has_no_ai_hint_angle_or_suggested_response_even_if_model_returns_them():
+    payload = simple_payload()
+    response = {
+        "selected_messages": [{
+            "message_id": "m-1",
+            "question_type": "GENERAL_FINANCE",
+            "ease_to_answer": "EASY",
+            "trading_stance": "NOT_APPLICABLE",
+            "priority": "NORMAL",
+            "selection_reason": "A simple concept question.",
+            "ai_hint": "Explain the concept in one line.",
+            "suggested_answer_angle": "Use a simple example.",
+            "suggested_live_response": "Here is an easy answer. This should never be shown.",
+            "needs_research": False,
+            "confidence": 0.95,
+            "cluster_message_ids": ["m-1"],
+        }],
+        "memory_candidates": [],
+    }
+    selected, _candidates = validate_reply_finder_output(response, payload)
+    item = selected["m-1"]
+    assert item["ai_hint"] is None
+    assert item["suggested_answer_angle"] is None
+    assert item["suggested_live_response"] is None
+    assert item["hint_validation"] == "NOT_REQUIRED"
+    assert item["answer_validation"] == "NOT_REQUIRED"
+
+
 def test_sentence_counter_detects_two_simple_sentences():
     assert _sentence_count("First sentence. Second sentence.") == 2
     assert _sentence_count("Only one sentence.") == 1
