@@ -9,6 +9,7 @@ from youtube_bot_dashboard.providers.deepseek import DeepSeekProvider
 from youtube_bot_dashboard.providers.gemini import GeminiProvider
 from youtube_bot_dashboard.providers.kimi import KimiProvider
 from youtube_bot_dashboard.providers.registry import ProviderRegistry
+from youtube_bot_dashboard.providers.qwen import QwenProvider
 
 
 class FakeCompletions:
@@ -129,3 +130,44 @@ def test_gemini_adapter_includes_reported_thinking_tokens_in_billable_output(mon
     assert result.input_tokens == 100
     assert result.output_tokens == 55
     assert result.cached_input_tokens == 10
+
+
+
+def test_qwen_adapter_reads_nested_cached_and_cache_write_tokens():
+    client = fake_client(response_with_usage(cached=40, cache_write=15))
+    provider = QwenProvider(
+        api_key="test-key",
+        base_url="https://example.invalid/v1",
+        model_id="qwen-test",
+        client=client,
+    )
+
+    result = provider.generate_json(system_prompt="instructions", payload={})
+
+    assert result.input_tokens == 100
+    assert result.output_tokens == 20
+    assert result.cached_input_tokens == 40
+    assert result.cache_write_tokens == 15
+
+
+def test_qwen_adapter_reads_documented_top_level_cached_tokens_variant():
+    usage = SimpleNamespace(
+        prompt_tokens=100,
+        completion_tokens=20,
+        prompt_tokens_details=None,
+        cached_tokens=30,
+    )
+    choice = SimpleNamespace(message=SimpleNamespace(content='{"results": []}'))
+    client = fake_client(SimpleNamespace(choices=[choice], usage=usage))
+    provider = QwenProvider(
+        api_key="test-key",
+        base_url="https://example.invalid/v1",
+        model_id="qwen-test",
+        client=client,
+    )
+
+    result = provider.generate_json(system_prompt="instructions", payload={})
+
+    assert result.input_tokens == 100
+    assert result.cached_input_tokens == 30
+    assert result.cache_write_tokens is None
