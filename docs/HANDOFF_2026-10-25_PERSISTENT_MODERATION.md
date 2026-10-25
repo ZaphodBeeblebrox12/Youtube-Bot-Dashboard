@@ -71,6 +71,38 @@ The notes say an active restriction/ban must be represented in the user's record
 
 At code checkpoint `4026f55eec93b8492f024510cad21774093b17e7`, GitHub Actions test run `40130179648` passed with **100 tests**. These are unit/integration tests, including faked YouTube source objects—not a live-broadcast test.
 
+## 3A. Locked product requirements: meaningful questions and remembering returning viewers
+
+These requirements are already recorded in `docs/PROJECT_DECISIONS.md` under **Second AI system: Reply Finder / Personal Attention Queue** and **Community Memory and glanceable live UX checkpoint (2026-10-25)**. Preserve them while working on moderation; do not reinterpret the dashboard as a raw-comment browser.
+
+### Meaningful questions — curated, attention-protecting queue
+
+The reason for this product is to protect the host from having to manually read a constant stream of potentially hurtful or demoralizing raw comments. The default host-facing workflow should surface the messages genuinely worth responding to, not dump the unfiltered chat stream in front of the host.
+
+Reply Finder is a separate AI system from moderation. It should prioritize:
+- genuine trading/concept/risk/strategy/lesson/community questions;
+- thoughtful disagreement and good-faith challenges;
+- constructive criticism and actionable feedback;
+- useful experiences, trade reviews, insights and new discussions;
+- supportive/community-building messages and important unresolved requests for help.
+
+Normally omit personal attacks, abuse, harassment, hate, threats, doxxing, scams, spam/flooding, provocation and near-duplicate questions. **“Worth answering” does not mean “positive only”:** a respectful critical question can be valuable; an abusive message is not worth surfacing just because it contains a question. Deduplicate repeated questions unless new information changes their value. The queue may be empty when nothing deserves the host's attention. Never automatically post suggested replies.
+
+### Remember returning members and viewers
+
+The goal is for returning community members—and viewers who contribute thoughtful questions—to feel recognized and remembered, without creating another inbox or forcing the host to stare at a dashboard while speaking.
+
+- Build profile history only from an actual stable YouTube channel/user ID. Record first-seen, last-seen, distinct stream sessions, message count and supplied display name. Mark someone as a member only when the input source explicitly says so; missing membership information must remain unknown.
+- Save *meaningful personal memory*, not every question. Examples: an ongoing learning challenge, goal, progress, meaningful lesson, or explicit preference that helps the host follow up. Do not save a basic definition question, generic market question, greeting, generic praise or spam as personal memory by itself.
+- Ask for memory candidates within the existing Reply Finder AI request, not via a new model call for every comment. Validate source message ID, stable viewer ID, type, required text and confidence server-side.
+- AI creates a private suggestion only. The host approves it via **Save memory** or discards it via **Skip**; the AI must not save it automatically or greet people publicly.
+- Limit to one pending suggestion and two saved memories per viewer. Never silently replace a saved memory when the limit is reached.
+- In the Reply Queue, a selected message from a returning viewer can show a compact cue when a saved memory has not been used in the current stream: supplied member status, stream count, first-seen date, one remembered detail and a suggested follow-up. **“Used this follow-up”** suppresses that cue for the rest of the current stream.
+- Do not copy ordinary raw chat text into the community-memory table. Keep only a short, neutral memory summary and optional follow-up. Preserve controls to forget an individual memory or remove a viewer profile, visit history and associated suggestions/memories.
+- Do not infer identity by display name or merge viewers with similar names. Do not infer membership. Do not invent viewer history when stable identity is absent.
+
+The repo notes say this behavior is implemented in `community_memory.py`, `live_queue.py`, `prompts/reply_finder.py`, `live_worker.py` and the Community Memory / Reply Queue UI in `app.py`; the README also lists meaningful-memory suggestions, owner review, the two-memory limit, forget controls and returning-viewer cues as implemented. Preserve and test existing functionality while delivering persistent moderation. Actual live-broadcast delivery still needs real-stream verification.
+
 ## 4. Important gap: persistent strikes, sanctions, blacklist and enforcement
 
 Before declaring moderation complete, inspect the current source again. At the checkpoint above, there is a `SessionShieldRecord`, but no complete persistent offence/strike/sanction domain model and policy engine implementing the agreed escalation ladder. The current repository also does not yet carry out the full authorized YouTube enforcement workflow.
