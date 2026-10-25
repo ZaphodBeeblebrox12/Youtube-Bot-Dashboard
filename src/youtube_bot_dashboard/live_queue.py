@@ -42,12 +42,16 @@ class LivePipeline(StrEnum):
 class ProviderName(StrEnum):
     GEMINI = "GEMINI"
     QWEN = "QWEN"
+    DEEPSEEK = "DEEPSEEK"
+    KIMI = "KIMI"
 
 
 class ProviderStrategy(StrEnum):
     ROUND_ROBIN = "ROUND_ROBIN"
     GEMINI_ONLY = "GEMINI_ONLY"
     QWEN_ONLY = "QWEN_ONLY"
+    DEEPSEEK_ONLY = "DEEPSEEK_ONLY"
+    KIMI_ONLY = "KIMI_ONLY"
 
 
 class TaskState(StrEnum):
@@ -105,10 +109,14 @@ class LiveQueueConfig:
             raise ValueError("at least one AI provider must be enabled")
         if len(set(self.enabled_providers)) != len(self.enabled_providers):
             raise ValueError("enabled_providers cannot contain duplicates")
-        if self.provider_strategy is ProviderStrategy.GEMINI_ONLY and ProviderName.GEMINI not in self.enabled_providers:
-            raise ValueError("GEMINI_ONLY requires Gemini to be enabled")
-        if self.provider_strategy is ProviderStrategy.QWEN_ONLY and ProviderName.QWEN not in self.enabled_providers:
-            raise ValueError("QWEN_ONLY requires Qwen to be enabled")
+        fixed_provider = {
+            ProviderStrategy.GEMINI_ONLY: ProviderName.GEMINI,
+            ProviderStrategy.QWEN_ONLY: ProviderName.QWEN,
+            ProviderStrategy.DEEPSEEK_ONLY: ProviderName.DEEPSEEK,
+            ProviderStrategy.KIMI_ONLY: ProviderName.KIMI,
+        }.get(self.provider_strategy)
+        if fixed_provider is not None and fixed_provider not in self.enabled_providers:
+            raise ValueError(f"{self.provider_strategy.value} requires {fixed_provider.value} to be enabled")
 
 
 class LiveSessionRecord(Base):
@@ -174,6 +182,7 @@ class LiveAIRequestBatch(Base):
     input_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
     output_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
     cached_input_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    cache_write_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
     sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -622,10 +631,14 @@ def _select_next_provider(
     pipeline: LivePipeline,
     config: LiveQueueConfig,
 ) -> ProviderName:
-    if config.provider_strategy is ProviderStrategy.GEMINI_ONLY:
-        return ProviderName.GEMINI
-    if config.provider_strategy is ProviderStrategy.QWEN_ONLY:
-        return ProviderName.QWEN
+    fixed_provider = {
+        ProviderStrategy.GEMINI_ONLY: ProviderName.GEMINI,
+        ProviderStrategy.QWEN_ONLY: ProviderName.QWEN,
+        ProviderStrategy.DEEPSEEK_ONLY: ProviderName.DEEPSEEK,
+        ProviderStrategy.KIMI_ONLY: ProviderName.KIMI,
+    }.get(config.provider_strategy)
+    if fixed_provider is not None:
+        return fixed_provider
     route_key = f"live:{pipeline.value}"
     state = session.get(ProviderRouteState, route_key, with_for_update=True)
     if state is None:
@@ -837,6 +850,7 @@ def complete_live_batch(
     input_tokens: int | None = None,
     output_tokens: int | None = None,
     cached_input_tokens: int | None = None,
+    cache_write_tokens: int | None = None,
     completed_at: datetime | None = None,
 ) -> tuple[int, int]:
     """Persist per-message results; missing results become retryable, not lost."""
@@ -850,6 +864,7 @@ def complete_live_batch(
     batch.input_tokens = input_tokens
     batch.output_tokens = output_tokens
     batch.cached_input_tokens = cached_input_tokens
+    batch.cache_write_tokens = cache_write_tokens
     batch.completed_at = now
 
     tasks = list(session.scalars(select(LiveMessageTask).where(
