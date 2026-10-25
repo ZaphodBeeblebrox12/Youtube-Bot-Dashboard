@@ -35,7 +35,7 @@ Gemini, Qwen, DeepSeek, and Kimi can be enabled independently. The existing Sett
 - Provider-managed prompt caching is used where supported. The app records reported cache-hit/cache-write usage; a missing field is treated as unknown.
 - Analytics is grouped by provider and pipeline. Estimated cost is shown only with a saved rate card for the exact configured model. Enter the provider's official USD-per-million-token prices in Settings; rates are not hard-coded into application code.
 
-The live-message queue still rotates at batch level, independently for Moderation and Reply Finder. Failed batches keep their assigned provider during retries; the application does not automatically switch providers on a failure.
+The live-message queue still rotates at batch level, independently for Moderation and Reply Finder. In round-robin mode, retryable batches keep their assigned provider while it remains enabled; if that provider is disabled or unavailable, the task can rejoin normal routing. The application does not automatically switch providers just because a request failed.
 
 ## Development
 
