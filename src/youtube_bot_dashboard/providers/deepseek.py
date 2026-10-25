@@ -63,6 +63,8 @@ class DeepSeekProvider:
         cached = _field(usage, "prompt_cache_hit_tokens")
         if cached is None:
             cached = _field(details, "cached_tokens")
+        if cached is None:
+            cached = _field(usage, "cache_read_input_tokens")
         return ProviderResponse(
             text=text,
             model_id=self.model_id,
