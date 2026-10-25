@@ -804,3 +804,50 @@ Official YouTube references:
 - A separate moderator-controlled persistent internal restriction can be permanent or timed. It filters future messages from both Moderation and Reply Finder across sessions, scrubs prepared payloads, and prevents an in-flight result from restoring an excluded task. It does not restrict the viewer's public YouTube chat and is not a YouTube ban.
 - The Moderation Review workspace exposes candidate evidence, review decisions, incident history, internal restrictions, appeals and an audit log. Super Chat priority cannot bypass Session Shield or persistent internal restrictions.
 - Production deployments still need their normal backup/migration process. An additive schema migration is version-controlled in the migrations directory. Live broadcast and OAuth enforcement verification remain separate; no live enforcement API is connected.
+
+## Glance-first filtered chat and community recognition (explicit product requirement, 2026-10-25)
+
+### Why this dashboard exists
+
+The core purpose is to protect the creator's experience while livestreaming. Raw YouTube chat can contain hurtful and demoralizing comments; the owner is building this dashboard so they can read a curated, filtered set of comments without exposing themselves to the raw feed. This is not merely a generic moderation console. The default live experience must help the creator comfortably keep up with constructive, relevant and community-building chat while continuing to present.
+
+A second core purpose is to make returning viewers feel recognized and part of a community. The interface should help the creator remember people and prior conversations without requiring them to open several pages or inspect a database record during the stream.
+
+These are product requirements, not optional UX suggestions.
+
+### Default live screen — filtered comments first
+
+- Opening the dashboard for a live stream should land on the filtered chat/creator reading view, not a KPI overview or moderation queue.
+- The main, dominant area of the screen is the actual viewer comments selected for the creator to read. Keep them readable at a glance while speaking; minimize controls, cards, statistics, badges and explanatory text competing with the comments.
+- By default, show only comments that have passed the configured safety/display filtering and have been selected as useful or appropriate for the creator to see. Never mix raw/unreviewed/held-back comments into this main feed. An unfiltered or audit view, if retained for deliberate troubleshooting, must be a separate, explicit action and must never become the default accidentally.
+- Do not repeat a “cleared”, “safe”, or “approved” badge on every displayed comment. Inclusion in the curated feed is the default signal. Use a label only when it carries additional meaning the creator needs at a glance, such as a source-verified Super Chat or a reliably supplied membership status.
+- Keep safety and filtering machinery unobtrusive. Do not routinely display counts/labels about harmful or rejected comments in a way that repeatedly draws the creator's attention back to them.
+- Preserve the distinction between internal display filtering, Session Shield, persistent internal exclusions and actual YouTube enforcement. The curated feed is a private reading surface; its presence must not imply a public ban or sanction.
+- A verified Super Chat may receive visual priority, but payment never bypasses safety filtering or an active internal restriction.
+
+### Live scrolling and new-message behaviour
+
+- The comments feed must be genuinely scrollable. Older comments are above; newest comments arrive at the bottom.
+- New messages should be ingested and displayed automatically as they qualify for the filtered feed.
+- If the creator is already at the bottom/latest position, keep them following the newest comments as they arrive.
+- If the creator scrolls upward to read earlier comments, do not yank the scroll position back to the bottom when a new comment arrives. Preserve the reader's position.
+- When newer comments arrive while the creator is scrolled up, show a compact “Jump to latest” affordance with an unread/new-message count. Activating it returns to the latest position. Do not force the creator to hunt for new comments.
+- Avoid layout jumps that change the message currently being read. The creator should be able to glance, read, and return to presenting without managing the interface.
+- Do not invent example/live counts or present placeholder comments as genuine data. Empty, disconnected, or stale states must be clearly and calmly identified.
+
+### Returning viewers, members, and community memory
+
+- Display a returning-viewer indicator alongside the person's name when prior-stream history can be reliably established from stored source data.
+- Display YouTube channel membership separately from returning-viewer status, and only when membership status is actually supplied/verified. A returning viewer is not automatically a member, and a member is not necessarily a returning viewer.
+- Show compact, useful context when available: number of previous streams seen and last-seen time. Do not fabricate this data when identity/history is missing.
+- Preserve Community Memory as a supporting feature. Make relevant past-conversation notes accessible from the person's chat item or through a quick, low-friction interaction, without forcing the creator to leave the main feed.
+- Community memory should help the creator recognize people and continue a conversation naturally, not turn the live feed into a dense profile/database screen. Use concise summaries and show more detail on demand.
+- Prefer the stable platform-provided user/channel ID for continuity. Do not infer identity from similar names or writing style; do not claim memory/history matches if source identifiers do not support it.
+- Keep identity/history indicators visible beside the name in the feed rather than requiring the creator to visit a separate Community Memory page just to recognize a regular.
+
+### Live-mode design test
+
+Every element in the live reading view must pass this test: does it help the creator safely read the filtered comments at a glance, keep their place while new comments arrive, or recognize and remember a genuine community member? If not, it should not compete with the comment feed during a livestream.
+
+This section captures an explicit owner requirement. Do not remove or reinterpret it in future redesigns. Before changing the default feed, membership/returning-viewer indicators, scroll anchoring, or community-memory context, inspect this decision and ask before overriding it.
+
