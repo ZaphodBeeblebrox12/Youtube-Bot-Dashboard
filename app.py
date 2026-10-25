@@ -56,6 +56,7 @@ from youtube_bot_dashboard.live_polls import (
     poll_options,
 )
 from youtube_bot_dashboard.youtube_polls import end_poll_on_youtube, launch_poll_on_youtube
+from youtube_bot_dashboard.youtube_chat import send_live_chat_message
 
 
 load_dotenv()
@@ -144,6 +145,12 @@ def _copy_response_button(response_text: str) -> None:
         height=36,
         scrolling=False,
     )
+
+
+def _reset_live_reply_sent_status() -> None:
+    """Allow a deliberately edited reply draft to be sent after a prior send."""
+    st.session_state["selected_live_response_sent"] = False
+    st.session_state.pop("selected_live_response_sent_id", None)
 
 
 def read_counts(session):
@@ -624,10 +631,13 @@ if page == "Dashboard":
                                     st.session_state["selected_live_response_message_id"] = item["message_id"]
                                     st.session_state["selected_live_response_text"] = item["answer"]
                                     st.session_state["selected_live_response_editor"] = item["answer"]
+                                    st.session_state["selected_live_response_session_id"] = item["session_id"]
+                                    st.session_state["selected_live_response_sent"] = False
+                                    st.session_state.pop("selected_live_response_sent_id", None)
                             with action_cols[1]:
                                 _copy_response_button(item["answer"])
                             if st.session_state.get("selected_live_response_message_id") == item["message_id"]:
-                                st.caption("Selected for your on-stream response · nothing is posted to YouTube.")
+                                st.caption("Draft loaded in the editor below. Review and edit it before sending.")
                             if item["answer_validation"] == "REVIEW_REQUIRED":
                                 st.warning("Sentence-count check needs review; treat this as a draft.")
                         else:
@@ -689,10 +699,13 @@ if page == "Dashboard":
                                 st.session_state["selected_live_response_message_id"] = lead["message_id"]
                                 st.session_state["selected_live_response_text"] = lead["answer"]
                                 st.session_state["selected_live_response_editor"] = lead["answer"]
+                                st.session_state["selected_live_response_session_id"] = lead["session_id"]
+                                st.session_state["selected_live_response_sent"] = False
+                                st.session_state.pop("selected_live_response_sent_id", None)
                         with action_cols[1]:
                             _copy_response_button(lead["answer"])
                         if st.session_state.get("selected_live_response_message_id") == lead["message_id"]:
-                            st.caption("Selected for your on-stream response · nothing is posted to YouTube.")
+                            st.caption("Draft loaded in the editor below. Review and edit it before sending.")
             reply_message_id = st.session_state.get("selected_live_response_message_id")
             if reply_message_id:
                 reply_source = next(
@@ -703,15 +716,47 @@ if page == "Dashboard":
                     st.markdown("**Reply draft**")
                     if reply_source:
                         st.caption(f"Prepared for {reply_source['username']}")
-                    st.caption("Edit before using on stream. This does not send a YouTube chat message.")
+                    st.caption("Edit the suggested reply here. Click Send only when you are happy with the final wording.")
                     st.text_area(
                         "Edit suggested response",
                         key="selected_live_response_editor",
                         height=110,
                         label_visibility="collapsed",
                         placeholder="Select “Use as reply” on a suggested response to start a draft.",
+                        on_change=_reset_live_reply_sent_status,
                     )
                     current_draft = st.session_state.get("selected_live_response_editor", "")
+                    send_session_id = (
+                        st.session_state.get("selected_live_response_session_id")
+                        or (reply_source["session_id"] if reply_source else None)
+                    )
+                    if st.session_state.get("selected_live_response_sent"):
+                        st.success("YouTube accepted this reply.")
+                        st.caption("The send action has completed. Select a suggested response again to prepare another draft.")
+                    elif not current_draft.strip():
+                        st.button("Send", key="dashboard-send-live-reply", type="primary", disabled=True)
+                        st.caption("Enter a reply before sending.")
+                    else:
+                        if st.button(
+                            "Send",
+                            key="dashboard-send-live-reply",
+                            type="primary",
+                            disabled=not bool(send_session_id),
+                        ):
+                            try:
+                                result = send_live_chat_message(
+                                    SessionFactory,
+                                    session_id=send_session_id,
+                                    message_text=current_draft,
+                                )
+                            except Exception as exc:
+                                st.error(f"Could not send to YouTube: {str(exc)[:600]}")
+                            else:
+                                st.session_state["selected_live_response_sent"] = True
+                                st.session_state["selected_live_response_sent_id"] = result["youtube_message_id"]
+                                st.success("YouTube accepted this reply.")
+                    if not send_session_id:
+                        st.caption("Sending is available only for a connected live chat.")
                     if current_draft.strip():
                         _copy_response_button(current_draft)
 
