@@ -16,10 +16,12 @@ from dotenv import load_dotenv
 from sqlalchemy import func, select
 
 from youtube_bot_dashboard.community_memory import (
+    COMMUNITY_RETENTION_DAYS,
     CommunityMemory,
     CommunityViewerProfile,
     forget_saved_memory,
     forget_viewer,
+    purge_expired_community_data,
     review_memory_suggestion,
 )
 from youtube_bot_dashboard.chat_visibility import is_ai_whitelisted_for_display
@@ -127,9 +129,6 @@ def read_counts(session):
     return total_messages, total_tasks, pending, total_batches
 
 
-st.title("YouTube Bot Dashboard")
-st.caption("Private live-stream control room · Local-first preparation build")
-
 with st.sidebar:
     st.header("Moderation levers")
     st.success("Lever 1 · Session Shield")
@@ -138,9 +137,13 @@ with st.sidebar:
     st.caption("No YouTube bans, timeouts, mutes or deletions are connected in this version.")
     page = st.radio(
         "Workspace",
-        ["Overview", "Live Chat", "Moderation Review", "Reply Queue", "Community Memory", "Live Polls", "Settings", "Past Videos Cleanup"],
+        ["Filtered Chat", "Overview", "Moderation Review", "Reply Queue", "Community Memory", "Live Polls", "Settings", "Past Videos Cleanup"],
         index=0,
     )
+
+if page != "Filtered Chat":
+    st.title("YouTube Bot Dashboard")
+    st.caption("Private live-stream control room · Local-first preparation build")
 
 if page == "Overview":
     with db_session() as session:
@@ -468,234 +471,182 @@ elif page == "Settings":
     st.code("python -m youtube_bot_dashboard.live_worker", language="bash")
     st.caption("Run the worker as a separate background process after setting DATABASE_URL and the selected provider's credentials/model environment variables. For direct YouTube intake, configure the OAuth Desktop client, run python -m youtube_bot_dashboard.youtube_auth, then python -m youtube_bot_dashboard.youtube_listener. Real-broadcast verification is still pending.")
 
-elif page == "Live Chat":
-    st.subheader("AI-whitelisted live chat")
-    st.caption(
-        "Ordinary messages need high-confidence AI safety approval and a useful Reply Finder selection. "
-        "Super Chats jump to the top after the same safety check clears them, even when there is no comment. "
-        "This is a private display filter; it does not delete messages or restrict anyone on YouTube."
-    )
-    show_unfiltered = st.checkbox(
-        "Show unfiltered messages (includes pending, uncertain, flagged, and low-value chat)",
-        value=False,
-        key="show_unfiltered_live_chat",
-        help="Use only when you deliberately want to inspect raw incoming chat. It may include abusive or upsetting messages.",
-    )
+elif page == "Filtered Chat":
+    @st.fragment(run_every="3s")
+    def render_filtered_chat():
+        st.caption("Only safety-cleared messages selected as useful or constructive appear here. Raw chat is not shown.")
 
-    with db_session() as session:
-        active_session_ids = list(session.scalars(
-            select(LiveSessionRecord.session_id)
-            .where(LiveSessionRecord.status == "ACTIVE")
-            .order_by(LiveSessionRecord.started_at.desc())
-        ))
-        query = select(LiveMessageRecord)
-        if active_session_ids:
-            query = query.where(LiveMessageRecord.session_id.in_(active_session_ids))
-        else:
-            # When no stream is active, show the most recent session for review.
-            latest_session_id = session.scalar(
-                select(LiveMessageRecord.session_id)
-                .order_by(LiveMessageRecord.last_seen_at.desc())
-                .limit(1)
-            )
-            if latest_session_id:
-                query = query.where(LiveMessageRecord.session_id == latest_session_id)
-
-        messages = list(session.scalars(
-            query.order_by(
-                LiveMessageRecord.is_super_chat.desc(),
-                LiveMessageRecord.first_seen_at.desc(),
-            ).limit(100)
-        ))
-        tasks_by_key = {}
-        if messages:
-            message_ids = [message.message_id for message in messages]
-            tasks = list(session.scalars(
-                select(LiveMessageTask).where(LiveMessageTask.message_id.in_(message_ids))
-            ))
-            tasks_by_key = {(task.message_id, task.pipeline): task for task in tasks}
-
-        active_shield_keys = {
-            (row[0], row[1])
-            for row in session.execute(
-                select(SessionShieldRecord.session_id, SessionShieldRecord.user_channel_id)
-                .join(LiveSessionRecord, LiveSessionRecord.session_id == SessionShieldRecord.session_id)
-                .where(
-                    SessionShieldRecord.active.is_(True),
-                    LiveSessionRecord.status == "ACTIVE",
-                )
-            ).all()
-        }
-
-        feed_items = []
-        for message in messages:
-            moderation_task = tasks_by_key.get((message.message_id, LivePipeline.MODERATION.value))
-            reply_task = tasks_by_key.get((message.message_id, LivePipeline.REPLY_FINDER.value))
-
-            def task_result(task):
-                if task is None:
-                    return {}
-                try:
-                    result = json.loads(task.result_json or "{}")
-                except (TypeError, json.JSONDecodeError):
-                    return {}
-                return result if isinstance(result, dict) else {}
-
-            moderation_result = task_result(moderation_task)
-            reply_result = task_result(reply_task)
-            is_shielded = bool(
-                message.user_channel_id
-                and (message.session_id, message.user_channel_id) in active_shield_keys
-            )
-            persistent_restriction = get_active_internal_restriction(session, message.user_channel_id)
-            is_restricted = persistent_restriction is not None
-            approved, reason = is_ai_whitelisted_for_display(
-                moderation_state=moderation_task.state if moderation_task else None,
-                moderation_result=moderation_result,
-                reply_finder_state=reply_task.state if reply_task else None,
-                reply_finder_result=reply_result,
-                is_super_chat=message.is_super_chat,
-            )
-            if is_restricted:
-                approved = False
-                reason = "Viewer is excluded by a persistent internal restriction."
-            elif is_shielded:
-                approved = False
-                reason = "Viewer is currently excluded by Session Shield."
-            feed_items.append({
-                "message_id": message.message_id,
-                "username": message.username or "Unknown viewer",
-                "text": message.text,
-                "published_at": message.published_at or message.first_seen_at,
-                "is_super_chat": bool(message.is_super_chat),
-                "super_chat_amount": super_chat_amount_label(message) if message.is_super_chat else None,
-                "is_shielded": is_shielded,
-                "is_restricted": is_restricted,
-                "approved": approved,
-                "reason": reason,
-                "moderation_state": moderation_task.state if moderation_task else "MISSING",
-                "reply_state": reply_task.state if reply_task else "MISSING",
-                "category": moderation_result.get("category", "PENDING"),
-            })
-
-    if show_unfiltered:
-        st.warning(
-            "Unfiltered view is on. Raw messages may include harmful, upsetting, uncertain, or unproductive content. "
-            "This only changes your private dashboard view; it does not change YouTube chat."
-        )
-        displayed_items = feed_items
-    else:
-        displayed_items = [item for item in feed_items if item["approved"]]
-
-    session_label = "active stream" if active_session_ids else "most recent session"
-    st.caption(
-        f"Showing {len(displayed_items)} message(s) from the {session_label} "
-        f"({len(feed_items)} recently ingested message(s) checked)."
-    )
-    if not feed_items:
-        st.info("No messages have been ingested for this session yet.")
-    elif not displayed_items:
-        if show_unfiltered:
-            st.info("No messages were found in the current feed.")
-        else:
-            st.info(
-                "No messages have passed both AI checks yet. Incoming messages remain hidden while checks are pending, "
-                "uncertain, flagged, or not selected as useful/constructive."
-            )
-    else:
-        for item in displayed_items:
-            message_time = item["published_at"].strftime("%H:%M:%S") if item["published_at"] else "Time unknown"
-            with st.container(border=True):
-                st.markdown(f"**{item['username']}** · {message_time}")
-                if item["is_super_chat"]:
-                    st.markdown(f"**💛 SUPER CHAT · {item['super_chat_amount']} · PRIORITY**")
-                st.write(item["text"])
-                if show_unfiltered:
-                    if item["approved"]:
-                        st.caption("AI-whitelisted · safety cleared and selected as useful/constructive")
-                    else:
-                        st.caption(f"Hidden from default view: {item['reason']}")
-    with st.expander("Technical processing status (message text is not shown here)"):
         with db_session() as session:
-            rows = list(session.scalars(
-                select(LiveMessageTask).order_by(LiveMessageTask.queued_at.desc()).limit(100)
+            active_session_ids = list(session.scalars(
+                select(LiveSessionRecord.session_id)
+                .where(LiveSessionRecord.status == "ACTIVE")
+                .order_by(LiveSessionRecord.started_at.desc())
             ))
-        if rows:
-            st.dataframe([
-                {
-                    "Message ID": task.message_id,
-                    "Pipeline": task.pipeline,
-                    "State": task.state,
-                    "Provider": task.provider or "Not assigned",
-                    "Attempts": task.attempt_count,
-                    "Queued at": task.queued_at,
-                    "Last error": task.last_error,
-                }
-                for task in rows
-            ], use_container_width=True)
-        else:
-            st.caption("No task records yet.")
-
-    st.divider()
-    st.subheader("Session Shield · all-AI input filter")
-    st.caption("A shielded viewer can still post on YouTube, but their subsequent messages are excluded from both AI pipelines for the rest of this session. This internal filter does not ban or mute anyone on YouTube.")
-    with db_session() as session:
-        shields = session.execute(
-            select(SessionShieldRecord, LiveSessionRecord)
-            .join(LiveSessionRecord, LiveSessionRecord.session_id == SessionShieldRecord.session_id)
-            .where(SessionShieldRecord.active.is_(True), LiveSessionRecord.status == "ACTIVE")
-            .order_by(SessionShieldRecord.created_at.desc())
-        ).all()
-        shield_items = [
-            {
-                "id": shield.id,
-                "username": shield.display_name or "Unknown viewer",
-                "user_id": shield.user_channel_id,
-                "session_id": shield.session_id,
-                "reason": shield.reason,
-                "confidence": shield.confidence,
-                "source": shield.source,
-                "created_at": shield.created_at,
-            }
-            for shield, _live_session in shields
-        ]
-    if shield_items:
-        st.dataframe([
-            {
-                "Username": item["username"],
-                "User channel ID": item["user_id"],
-                "Reason": item["reason"],
-                "Confidence": item["confidence"],
-                "Source": item["source"],
-                "Added at": item["created_at"],
-                "Session": item["session_id"],
-            }
-            for item in shield_items
-        ], use_container_width=True, hide_index=True)
-        option_ids = [item["id"] for item in shield_items]
-        labels = {
-            item["id"]: f"{item['username']} · {item['user_id']} · {item['session_id']}"
-            for item in shield_items
-        }
-        selected_id = st.selectbox(
-            "Remove an internal filter",
-            options=option_ids,
-            format_func=lambda value: labels[value],
-        )
-        if st.button("Remove Session Shield for selected user", use_container_width=True):
-            selected = next(item for item in shield_items if item["id"] == selected_id)
-            with db_session() as session:
-                did_remove = unshield_user_for_session(
-                    session,
-                    session_id=selected["session_id"],
-                    user_channel_id=selected["user_id"],
+            query = select(LiveMessageRecord)
+            if active_session_ids:
+                query = query.where(LiveMessageRecord.session_id.in_(active_session_ids))
+                session_label = "active stream"
+            else:
+                latest_session_id = session.scalar(
+                    select(LiveMessageRecord.session_id)
+                    .order_by(LiveMessageRecord.last_seen_at.desc())
+                    .limit(1)
                 )
-                session.commit()
-            if did_remove:
-                st.success("Internal filter removed for future messages in this session. Previously excluded messages are not automatically requeued.")
-                st.rerun()
-    else:
-        st.caption("No active Session Shield exclusions for an active session.")
+                if latest_session_id:
+                    query = query.where(LiveMessageRecord.session_id == latest_session_id)
+                session_label = "most recent session"
+
+            # Fetch the newest window, then render chronologically so the newest
+            # messages are at the bottom of the scrollable reading feed.
+            newest_first = list(session.scalars(
+                query.order_by(LiveMessageRecord.first_seen_at.desc()).limit(250)
+            ))
+            messages = list(reversed(newest_first))
+            tasks_by_key = {}
+            if messages:
+                message_ids = [message.message_id for message in messages]
+                tasks = list(session.scalars(
+                    select(LiveMessageTask).where(LiveMessageTask.message_id.in_(message_ids))
+                ))
+                tasks_by_key = {(task.message_id, task.pipeline): task for task in tasks}
+
+            shielded_keys = {
+                (row[0], row[1])
+                for row in session.execute(
+                    select(SessionShieldRecord.session_id, SessionShieldRecord.user_channel_id)
+                    .join(LiveSessionRecord, LiveSessionRecord.session_id == SessionShieldRecord.session_id)
+                    .where(
+                        SessionShieldRecord.active.is_(True),
+                        LiveSessionRecord.status == "ACTIVE",
+                    )
+                ).all()
+            }
+
+            cutoff = utc_now() - timedelta(days=COMMUNITY_RETENTION_DAYS)
+            user_ids = {message.user_channel_id for message in messages if message.user_channel_id}
+            profiles_by_id = {}
+            memories_by_id = {}
+            if user_ids:
+                profiles = list(session.scalars(
+                    select(CommunityViewerProfile).where(
+                        CommunityViewerProfile.user_channel_id.in_(user_ids),
+                        CommunityViewerProfile.last_seen_at >= cutoff,
+                    )
+                ))
+                profiles_by_id = {profile.user_channel_id: profile for profile in profiles}
+                saved_memories = list(session.scalars(
+                    select(CommunityMemory)
+                    .where(
+                        CommunityMemory.user_channel_id.in_(user_ids),
+                        CommunityMemory.status == "SAVED",
+                        CommunityMemory.created_at >= cutoff,
+                    )
+                    .order_by(CommunityMemory.created_at.desc())
+                ))
+                for memory in saved_memories:
+                    memories_by_id.setdefault(memory.user_channel_id, []).append(memory)
+
+            displayed_items = []
+            for message in messages:
+                moderation_task = tasks_by_key.get((message.message_id, LivePipeline.MODERATION.value))
+                reply_task = tasks_by_key.get((message.message_id, LivePipeline.REPLY_FINDER.value))
+
+                def task_result(task):
+                    if task is None:
+                        return {}
+                    try:
+                        result = json.loads(task.result_json or "{}")
+                    except (TypeError, json.JSONDecodeError):
+                        return {}
+                    return result if isinstance(result, dict) else {}
+
+                moderation_result = task_result(moderation_task)
+                reply_result = task_result(reply_task)
+                shielded = bool(
+                    message.user_channel_id
+                    and (message.session_id, message.user_channel_id) in shielded_keys
+                )
+                restricted = get_active_internal_restriction(session, message.user_channel_id) is not None
+                approved, _reason = is_ai_whitelisted_for_display(
+                    moderation_state=moderation_task.state if moderation_task else None,
+                    moderation_result=moderation_result,
+                    reply_finder_state=reply_task.state if reply_task else None,
+                    reply_finder_result=reply_result,
+                    is_super_chat=message.is_super_chat,
+                )
+                # Shield/restriction takes precedence even if an already-dispatched
+                # AI task completed successfully.
+                if restricted or shielded:
+                    approved = False
+                if not approved:
+                    continue
+
+                profile = profiles_by_id.get(message.user_channel_id)
+                saved_memories_for_user = memories_by_id.get(message.user_channel_id, [])
+                memory = next((
+                    candidate for candidate in saved_memories_for_user
+                    if candidate.last_used_session_id != message.session_id
+                ), None)
+                displayed_items.append({
+                    "message_id": message.message_id,
+                    "session_id": message.session_id,
+                    "user_id": message.user_channel_id,
+                    "username": message.username or "Unknown viewer",
+                    "text": message.text,
+                    "published_at": message.published_at or message.first_seen_at,
+                    "is_super_chat": bool(message.is_super_chat),
+                    "super_chat_amount": super_chat_amount_label(message) if message.is_super_chat else None,
+                    "profile": profile,
+                    "memory": memory,
+                })
+
+        st.subheader("Comments worth reading")
+        if not messages:
+            st.info("No chat has arrived for this stream yet.")
+        elif not displayed_items:
+            st.info("No comments are ready to show yet. New comments appear here only after they pass the filters.")
+        else:
+            with st.container(height=620, border=True):
+                for item in displayed_items:
+                    with st.container(border=False):
+                        name_col, time_col = st.columns([5, 1])
+                        name_col.markdown(f"**{item['username']}**")
+                        profile = item["profile"]
+                        if profile and profile.distinct_sessions_seen >= 2:
+                            name_col.caption(f"↻ Returning · {profile.distinct_sessions_seen} streams in the last {COMMUNITY_RETENTION_DAYS} days")
+                        if profile and profile.is_member is True:
+                            name_col.caption("★ YouTube member")
+                        time_col.caption(
+                            item["published_at"].strftime("%H:%M") if item["published_at"] else "Time unknown"
+                        )
+                        if item["is_super_chat"]:
+                            st.caption(f"💛 SUPER CHAT · {item['super_chat_amount']} · Priority")
+                        st.write(item["text"])
+
+                        memory = item["memory"]
+                        if profile and profile.distinct_sessions_seen >= 2 and memory:
+                            with st.expander("Remembered context"):
+                                st.write(memory.summary)
+                                st.caption("Possible follow-up: " + memory.suggested_follow_up)
+                                if st.button(
+                                    "Used this follow-up",
+                                    key=f"memory-used-live-{memory.id}-{item['message_id']}",
+                                ):
+                                    with db_session() as session:
+                                        saved = session.get(CommunityMemory, memory.id)
+                                        if saved:
+                                            saved.last_used_at = utc_now()
+                                            saved.last_used_session_id = item["session_id"]
+                                            session.commit()
+                                    st.rerun()
+                        st.divider()
+
+        st.caption(
+            f"Filtered reading feed · {session_label} · community memories and viewer history expire after "
+            f"{COMMUNITY_RETENTION_DAYS} days."
+        )
+
+    render_filtered_chat()
 
 elif page == "Moderation Review":
     st.subheader("Moderation review and persistent internal restrictions")
@@ -1189,6 +1140,8 @@ elif page == "Community Memory":
         "Only the stable channel ID, basic visit history, and a short memory you approve are kept."
     )
     with db_session() as session:
+        purge_expired_community_data(session)
+        session.commit()
         profile_count = session.scalar(select(func.count()).select_from(CommunityViewerProfile)) or 0
         returning_count = session.scalar(select(func.count()).select_from(CommunityViewerProfile).where(
             CommunityViewerProfile.distinct_sessions_seen >= 2
