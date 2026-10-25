@@ -51,12 +51,12 @@ def test_profile_tracks_first_seen_last_seen_and_distinct_sessions():
         with factory() as session:
             profile = session.get(CommunityViewerProfile, "channel-1")
             visits = list(session.scalars(select(CommunityViewerVisit).where(CommunityViewerVisit.user_channel_id == "channel-1")))
-            # Viewer history is retained as a rolling three-day window. A
-            # return after thirty days is treated as a fresh retained profile.
-            assert profile.first_seen_at.replace(tzinfo=timezone.utc) == second
+            # Personal memories and detailed visit rows expire after three
+            # days, but the compact profile aggregate preserves recognition.
+            assert profile.first_seen_at.replace(tzinfo=timezone.utc) == first
             assert profile.last_seen_at.replace(tzinfo=timezone.utc) == second
-            assert profile.distinct_sessions_seen == 1
-            assert profile.total_message_count == 1
+            assert profile.distinct_sessions_seen == 2
+            assert profile.total_message_count == 3
             assert len(visits) == 1
             assert visits[0].session_id == "s2"
     finally:
@@ -235,7 +235,7 @@ def test_community_memories_expire_three_days_after_creation():
         engine.dispose()
 
 
-def test_viewer_profile_and_visit_history_expire_after_three_days_inactive():
+def test_viewer_profile_survives_but_visit_detail_expires_after_three_days():
     engine, factory = setup_db()
     try:
         now = datetime(2026, 10, 25, 12, tzinfo=timezone.utc)
@@ -246,21 +246,25 @@ def test_viewer_profile_and_visit_history_expire_after_three_days_inactive():
             )
             record_viewer_activity(
                 session, user_channel_id="recent-channel", display_name="Returning viewer",
-                session_id="s1", observed_at=now - timedelta(days=2),
+                session_id="s2", observed_at=now - timedelta(days=2),
             )
             outcome = purge_expired_community_data(session, now=now)
             session.commit()
-            assert outcome["expired_profiles"] == 1
-            assert session.get(CommunityViewerProfile, "old-channel") is None
+            assert outcome["expired_profiles"] == 0
+            assert outcome["expired_visits"] == 1
+            assert session.get(CommunityViewerProfile, "old-channel") is not None
             assert session.get(CommunityViewerProfile, "recent-channel") is not None
             assert session.scalar(select(func.count()).select_from(CommunityViewerVisit).where(
                 CommunityViewerVisit.user_channel_id == "old-channel"
             )) == 0
+            assert session.scalar(select(func.count()).select_from(CommunityViewerVisit).where(
+                CommunityViewerVisit.user_channel_id == "recent-channel"
+            )) == 1
     finally:
         engine.dispose()
 
 
-def test_viewer_return_after_retention_window_starts_fresh_history():
+def test_viewer_return_after_retention_window_keeps_compact_profile():
     engine, factory = setup_db()
     try:
         now = datetime.now(timezone.utc)
@@ -270,6 +274,10 @@ def test_viewer_return_after_retention_window_starts_fresh_history():
                 session, user_channel_id="returning-after-expiry", display_name="Asha",
                 session_id="s1", observed_at=stale_time,
             )
+            session.commit()
+
+        with factory() as session:
+            purge_expired_community_data(session, now=now)
             session.commit()
 
         with factory() as session:
@@ -285,8 +293,9 @@ def test_viewer_return_after_retention_window_starts_fresh_history():
                 CommunityViewerVisit.user_channel_id == "returning-after-expiry"
             )))
             assert profile is not None
-            assert profile.distinct_sessions_seen == 1
-            assert profile.total_message_count == 1
+            assert profile.first_seen_at.replace(tzinfo=timezone.utc) == stale_time
+            assert profile.distinct_sessions_seen == 2
+            assert profile.total_message_count == 2
             assert len(visits) == 1
             assert visits[0].session_id == "s2"
     finally:
