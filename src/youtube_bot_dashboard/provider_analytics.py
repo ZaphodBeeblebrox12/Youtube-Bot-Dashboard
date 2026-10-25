@@ -105,6 +105,13 @@ def estimate_batch_cost_usd(batch: LiveAIRequestBatch, rate_card: ProviderRateCa
     """
     if rate_card is None or batch.input_tokens is None or batch.output_tokens is None:
         return None
+    if (
+        batch.cache_write_tokens is None
+        and rate_card.cache_write_usd_per_million > rate_card.input_usd_per_million
+    ):
+        # Avoid under-reporting models with a premium cache-write rate when
+        # the response did not include cache-write usage.
+        return None
     input_tokens = max(0, int(batch.input_tokens))
     output_tokens = max(0, int(batch.output_tokens))
     cached_tokens = max(0, int(batch.cached_input_tokens or 0))
@@ -133,10 +140,12 @@ def _new_stats(provider: str, pipeline: str | None = None, model_id: str | None 
         "output_tokens": 0,
         "cached_input_tokens": 0,
         "cache_write_tokens": 0,
-        "cache_observed_requests": 0,
+        "cache_hit_observed_requests": 0,
+        "cache_write_observed_requests": 0,
         "cache_observed_input_tokens": 0,
         "latencies": [],
         "cost_estimate_usd_sum": 0.0,
+        "cost_rate_card_requests": 0,
         "cost_covered_requests": 0,
         "cost_missing_usage_requests": 0,
     }
@@ -159,12 +168,14 @@ def _record_batch(stats: dict, batch: LiveAIRequestBatch, rate_card: ProviderRat
         stats["output_tokens"] += max(0, int(batch.output_tokens))
     if batch.cached_input_tokens is not None:
         stats["cached_input_tokens"] += max(0, int(batch.cached_input_tokens))
+        if batch.input_tokens is not None:
+            stats["cache_hit_observed_requests"] += 1
+            stats["cache_observed_input_tokens"] += max(0, int(batch.input_tokens))
     if batch.cache_write_tokens is not None:
         stats["cache_write_tokens"] += max(0, int(batch.cache_write_tokens))
-    if batch.cached_input_tokens is not None or batch.cache_write_tokens is not None:
-        stats["cache_observed_requests"] += 1
-        if batch.input_tokens is not None:
-            stats["cache_observed_input_tokens"] += max(0, int(batch.input_tokens))
+        stats["cache_write_observed_requests"] += 1
+    if rate_card is not None:
+        stats["cost_rate_card_requests"] += 1
 
     if batch.sent_at is not None and batch.completed_at is not None:
         latency = (batch.completed_at - batch.sent_at).total_seconds()
@@ -193,8 +204,15 @@ def _finalize_stats(stats: dict) -> dict:
     )
     stats["cache_hit_rate_percent"] = (
         100.0 * stats["cached_input_tokens"] / stats["cache_observed_input_tokens"]
-        if stats["cache_observed_input_tokens"] else None
+        if stats["cache_hit_observed_requests"] and stats["cache_observed_input_tokens"] else None
     )
+    if not stats["cache_hit_observed_requests"]:
+        stats["cached_input_tokens"] = None
+    if not stats["cache_write_observed_requests"]:
+        stats["cache_write_tokens"] = None
+    stats.pop("cache_hit_observed_requests", None)
+    stats.pop("cache_write_observed_requests", None)
+    stats.pop("cache_observed_input_tokens", None)
     stats["cost_estimate_usd"] = (
         stats["cost_estimate_usd_sum"] if stats["cost_covered_requests"] else None
     )
