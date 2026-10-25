@@ -59,6 +59,10 @@ class QwenProvider:
         usage = getattr(response, "usage", None)
         prompt_details = getattr(usage, "prompt_tokens_details", None) if usage else None
         cached = getattr(prompt_details, "cached_tokens", None) if prompt_details else None
+        if cached is None and usage is not None:
+            cached = getattr(usage, "cached_tokens", None)
+        if cached is None and usage is not None:
+            cached = getattr(usage, "cache_read_input_tokens", None)
         cache_write = None
         if prompt_details:
             cache_write = getattr(prompt_details, "cache_write_tokens", None)
