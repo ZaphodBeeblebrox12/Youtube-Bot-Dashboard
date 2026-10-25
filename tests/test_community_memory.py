@@ -46,6 +46,7 @@ def test_profile_tracks_first_seen_last_seen_and_distinct_sessions():
             record_viewer_activity(session, user_channel_id="channel-1", display_name="Asha", session_id="s1", observed_at=first)
             record_viewer_activity(session, user_channel_id="channel-1", display_name="Asha", session_id="s1", observed_at=first + timedelta(minutes=1))
             record_viewer_activity(session, user_channel_id="channel-1", display_name="Asha", session_id="s2", observed_at=second)
+            purge_expired_community_data(session, now=second)
             session.commit()
         with factory() as session:
             profile = session.get(CommunityViewerProfile, "channel-1")
