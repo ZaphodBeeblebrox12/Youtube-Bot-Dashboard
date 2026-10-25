@@ -600,13 +600,42 @@ elif page == "Filtered Chat":
                     "memory": memory,
                 })
 
-        st.subheader("Comments worth reading")
+        seen_key = "_filtered_chat_seen_message_ids"
+        unread_key = "_filtered_chat_new_count"
+        scroll_key = "_filtered_chat_scroll_key"
+        current_ids = [item["message_id"] for item in displayed_items]
+        if seen_key not in st.session_state:
+            # First render establishes the baseline instead of treating the
+            # historical backlog as new/unread chat.
+            st.session_state[seen_key] = current_ids
+            st.session_state[unread_key] = 0
+        else:
+            known_ids = set(st.session_state[seen_key])
+            newly_selected = sum(1 for message_id in current_ids if message_id not in known_ids)
+            st.session_state[unread_key] = min(
+                999,
+                int(st.session_state.get(unread_key, 0)) + newly_selected,
+            )
+            st.session_state[seen_key] = current_ids
+
+        title_col, jump_col = st.columns([5, 2])
+        title_col.subheader("Comments worth reading")
+        new_count = int(st.session_state.get(unread_key, 0))
+        if new_count > 0 and jump_col.button(
+            f"↓ Jump to latest · {new_count} new",
+            key="filtered_chat_jump_to_latest",
+            use_container_width=True,
+        ):
+            st.session_state[unread_key] = 0
+            st.session_state[scroll_key] = int(st.session_state.get(scroll_key, 0)) + 1
+            st.rerun()
+
         if not messages:
             st.info("No chat has arrived for this stream yet.")
         elif not displayed_items:
             st.info("No comments are ready to show yet. New comments appear here only after they pass the filters.")
         else:
-            with st.container(height=500, border=True, autoscroll=True, key="filtered_live_chat_feed"):
+            with st.container(height=500, border=True, autoscroll=True, key=f"filtered_live_chat_feed_{st.session_state.get('_filtered_chat_scroll_key', 0)}"):
                 for item in displayed_items:
                     with st.container(border=False):
                         name_col, time_col = st.columns([5, 1])
