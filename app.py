@@ -851,7 +851,7 @@ elif page == "Settings":
                 ProviderStrategy.DEEPSEEK_ONLY: "DeepSeek only",
                 ProviderStrategy.KIMI_ONLY: "Kimi only",
             }[option],
-            help="Round robin advances independently for Moderation and Reply Finder. Fixed-provider modes are useful for controlled comparisons; retries stay with the originally assigned provider.",
+            help="Round robin advances independently for Moderation and Reply Finder. In round-robin mode, retries stay with their assigned provider while it remains enabled; fixed-provider modes support controlled comparisons.",
         )
         max_attempts = st.number_input(
             "Maximum provider attempts per batch item",
