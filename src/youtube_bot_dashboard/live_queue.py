@@ -701,6 +701,37 @@ def prepare_due_batch(
     if not tasks:
         return None
 
+    # In round-robin mode, keep retryable work on its original provider so
+    # failures do not consume another provider's rotation slot. If that provider
+    # was disabled/unavailable, release the task back to normal routing.
+    if config.provider_strategy is ProviderStrategy.ROUND_ROBIN:
+        enabled_values = {provider.value for provider in config.enabled_providers}
+        for task in tasks:
+            if (
+                task.state == TaskState.FAILED_RETRYABLE.value
+                and task.provider
+                and task.provider not in enabled_values
+            ):
+                task.provider = None
+                task.state = TaskState.PENDING.value
+        retryable_with_provider = [
+            task for task in tasks
+            if task.state == TaskState.FAILED_RETRYABLE.value
+            and task.provider in enabled_values
+        ]
+        if retryable_with_provider:
+            retry_provider = retryable_with_provider[0].provider
+            tasks = [
+                task for task in retryable_with_provider
+                if task.provider == retry_provider
+            ]
+        else:
+            tasks = [
+                task for task in tasks
+                if task.state == TaskState.PENDING.value or not task.provider
+            ]
+        session.flush()
+
     # A pending Super Chat skips the normal collection delay but still needs
     # the same AI safety check before appearing in the visible feed.
     first_message = session.get(LiveMessageRecord, tasks[0].message_id)
@@ -761,7 +792,15 @@ def prepare_due_batch(
         session.flush()
         return None
 
-    provider = _select_next_provider(session, pipeline=pipeline, config=config)
+    if (
+        config.provider_strategy is ProviderStrategy.ROUND_ROBIN
+        and tasks
+        and tasks[0].state == TaskState.FAILED_RETRYABLE.value
+        and tasks[0].provider
+    ):
+        provider = ProviderName(tasks[0].provider)
+    else:
+        provider = _select_next_provider(session, pipeline=pipeline, config=config)
     batch_id = str(uuid.uuid4())
     payload = {
         "session_id": session_id,
