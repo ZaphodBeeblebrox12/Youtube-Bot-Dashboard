@@ -874,3 +874,15 @@ Implementation checkpoint: community_memory.py exposes purge_expired_community_d
 - Tests added/updated cover three-day memory expiry, visit-row expiry, rolling profile counters, and preserving returning-viewer identity after a longer break. The stale-time Shield batch test now uses the actual current UTC clock instead of hard-coded midnight.
 - **CI is not verified for the latest branch head.** The last available run [40169805354](https://github.com/ZaphodBeeblebrox12/Youtube-Bot-Dashboard/actions/runs/40169805354) failed at the old test test_shielding_after_ingest_scrubs_prepared_batches_for_both_ai_pipelines because its simulated timestamp was behind the live enqueue timestamp (114 passed, 1 failed). The test was patched, but GitHub Actions has not reported a subsequent run against the current branch head. Do not describe these changes as fully tested until the current suite runs.
 
+## Requirement change control — explicit owner approval required
+
+**No existing requirement may be changed without the owner's explicit approval.** This includes adding exceptions, removing a requirement, weakening or strengthening it, changing its meaning, replacing it with a new interpretation, or changing an agreed policy, retention period, filtering rule, escalation rule, accepted behaviour, or product constraint.
+
+- Treat settled requirements in this document and the handoff as binding. Implement them as written; do not silently “improve,” simplify, infer an alternative, or substitute a design preference.
+- If a proposed change appears necessary or two existing requirements conflict, record the conflict and its impact, then ask the owner for explicit approval before changing either requirement. Do not resolve a requirements conflict by guessing.
+- A screenshot or visual reference establishes the desired visual direction only to the extent the owner specified; it does not automatically authorize changing established behaviour or policy.
+- Distinguish implementation work that fulfils an existing requirement from a change to the requirement itself. Do not ask for repeated approval to carry out already-approved requirements, but do ask before changing what they require.
+- This rule applies to future chats, code, UI, prompts, tests, documentation, defaults and data policies. Record any approved requirement change in this source-of-truth document and the handoff, including what was approved and by whom (the owner).
+
+This is a non-negotiable process requirement.
+
