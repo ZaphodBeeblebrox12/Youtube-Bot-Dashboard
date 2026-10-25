@@ -138,11 +138,13 @@ def test_session_shield_excludes_future_messages_from_both_ai_pipelines(db):
 
 def test_shielding_after_ingest_scrubs_prepared_batches_for_both_ai_pipelines(db):
     _, factory = db
-    now = datetime(2026, 10, 25, tzinfo=timezone.utc)
     with factory() as session:
         ingest_live_message(session, msg("m-1", "channel-evil"))
         ingest_live_message(session, msg("m-2", "channel-good"))
         session.commit()
+        # Base the simulated due time on the actual enqueue time. A hard-coded
+        # midnight UTC becomes stale as soon as the test suite runs later that day.
+        now = datetime.now(timezone.utc)
 
         config = LiveQueueConfig(batch_delay_seconds=2.0, max_messages_per_batch=100)
         batches = {}
