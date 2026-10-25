@@ -87,73 +87,31 @@ def purge_expired_community_data(
     *,
     now: datetime | None = None,
 ) -> dict[str, int]:
-    """Delete community memories and viewer history older than the 3-day window.
+    """Expire personal memories and detailed visit rows after three days.
 
-    Memory suggestions and saved memories expire three days after creation.
-    Viewer profiles/visit rows expire after three days without activity. For
-    active profiles, visit counters are recomputed only from visits in-window.
+    Keep the small aggregate viewer profile so returning community members can
+    still be recognized after a longer break. Do not store ordinary chat text
+    here; only compact profile statistics and approved memory summaries persist.
     """
-    current_time = now or utc_now()
+    current_time = _as_utc(now or utc_now())
     cutoff = current_time - timedelta(days=COMMUNITY_RETENTION_DAYS)
 
     expired_memories = session.execute(
         delete(CommunityMemory).where(CommunityMemory.created_at < cutoff)
     ).rowcount or 0
-
-    stale_profile_ids = list(session.scalars(
-        select(CommunityViewerProfile.user_channel_id).where(
-            CommunityViewerProfile.last_seen_at < cutoff
-        )
-    ))
-    if stale_profile_ids:
-        session.execute(
-            delete(CommunityMemory).where(
-                CommunityMemory.user_channel_id.in_(stale_profile_ids)
-            )
-        )
-        session.execute(
-            delete(CommunityViewerVisit).where(
-                CommunityViewerVisit.user_channel_id.in_(stale_profile_ids)
-            )
-        )
-
     expired_visits = session.execute(
         delete(CommunityViewerVisit).where(CommunityViewerVisit.last_seen_at < cutoff)
     ).rowcount or 0
-    expired_profiles = session.execute(
-        delete(CommunityViewerProfile).where(CommunityViewerProfile.last_seen_at < cutoff)
-    ).rowcount or 0
 
-    profiles = list(session.scalars(
-        select(CommunityViewerProfile).where(CommunityViewerProfile.last_seen_at >= cutoff)
-    ))
-    for profile in profiles:
-        recent_visits = list(session.scalars(
-            select(CommunityViewerVisit)
-            .where(
-                CommunityViewerVisit.user_channel_id == profile.user_channel_id,
-                CommunityViewerVisit.last_seen_at >= cutoff,
-            )
-            .order_by(CommunityViewerVisit.first_seen_at.asc())
-        ))
-        if recent_visits:
-            profile.first_seen_at = recent_visits[0].first_seen_at
-            profile.first_seen_session_id = recent_visits[0].session_id
-            profile.distinct_sessions_seen = len(recent_visits)
-            profile.total_message_count = sum(visit.message_count for visit in recent_visits)
-        else:
-            # A recently active profile should normally have a visit row. Keep
-            # the aggregate conservative if older data is inconsistent.
-            profile.distinct_sessions_seen = 1
-            profile.total_message_count = 1
-
+    # The profile is one compact row per stable channel ID. Preserve lifetime
+    # first/last-seen and distinct-session aggregates for community recognition;
+    # the high-cardinality per-stream visit rows and personal memories are TTL'd.
     session.flush()
     return {
         "expired_memories": int(expired_memories),
         "expired_visits": int(expired_visits),
-        "expired_profiles": int(expired_profiles),
+        "expired_profiles": 0,
     }
-
 
 def _ensure_community_retention_cleanup(
     session: Session,
@@ -186,23 +144,6 @@ def record_viewer_activity(
     now = observed_at or utc_now()
     _ensure_community_retention_cleanup(session)
     profile = session.get(CommunityViewerProfile, user_channel_id)
-    retention_cutoff = utc_now() - timedelta(days=COMMUNITY_RETENTION_DAYS)
-    if profile is not None and _as_utc(profile.last_seen_at) < retention_cutoff:
-        # If an inactive viewer returns between scheduled purges, remove their
-        # expired continuity data now instead of reviving out-of-window history.
-        session.execute(
-            delete(CommunityMemory).where(
-                CommunityMemory.user_channel_id == user_channel_id
-            )
-        )
-        session.execute(
-            delete(CommunityViewerVisit).where(
-                CommunityViewerVisit.user_channel_id == user_channel_id
-            )
-        )
-        session.delete(profile)
-        session.flush()
-        profile = None
     if profile is None:
         profile = CommunityViewerProfile(
             user_channel_id=user_channel_id,
