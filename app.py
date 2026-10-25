@@ -741,14 +741,14 @@ if page == "Dashboard":
                                     st.session_state["selected_live_followup_text"] = next_memory["follow_up"]
                             with followup_cols[1]:
                                 if st.button("Used this follow-up", key=f"dashboard-memory-used-{next_memory['id']}"):
-                                with db_session() as session:
-                                    saved = session.get(CommunityMemory, next_memory["id"])
-                                    if saved:
-                                        from youtube_bot_dashboard.storage import utc_now
-                                        saved.last_used_at = utc_now()
-                                        saved.last_used_session_id = lead["session_id"]
-                                        session.commit()
-                                st.rerun()
+                                    with db_session() as session:
+                                        saved = session.get(CommunityMemory, next_memory["id"])
+                                        if saved:
+                                            from youtube_bot_dashboard.storage import utc_now
+                                            saved.last_used_at = utc_now()
+                                            saved.last_used_session_id = lead["session_id"]
+                                            session.commit()
+                                    st.rerun()
                             if st.session_state.get("selected_live_followup_id") == next_memory["id"]:
                                 st.caption("Selected for your on-stream follow-up · not posted to YouTube.")
                 else:
