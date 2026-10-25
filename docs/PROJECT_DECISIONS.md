@@ -754,6 +754,22 @@ The owner wants viewers—especially returning members and people who contribute
 - `youtube_auth.py`, `youtube_listener.py`, and `stream_list.proto`: optional local read-only YouTube streamList connection; the protobuf field number for live_chat_id is aligned with the documented schema. A real stream remains untested.
 
 
+
+
+### What it means to be remembered: remember the meaningful interaction
+
+“Returning viewer” should not be a generic badge or a vague note that somebody was present before. The host should be able to pick up a real thread from a previous interaction and make the viewer feel that their question or experience mattered.
+
+- Remember **what the viewer actually asked, explored, or shared** when it reveals an ongoing question, challenge, goal, learning step, meaningful insight, preference, or progress. The memorable part is the useful substance of that interaction—not merely the fact that they commented or have a member badge.
+- A useful saved summary should preserve three things when the source supports them: **topic/question** (what they were trying to understand), **what made it memorable** (the specific challenge, distinction, decision, or progress they described), and **how to continue the conversation** (a natural follow-up).
+- Example pattern (illustrative, not real viewer data): “Asked about entering breakouts too early; the notable detail was that they recognized the setup but struggled to wait for confirmation; follow-up: ‘Did waiting for confirmation help on the next trade?’” The cue should be specific enough to jog the host’s memory without replaying the whole raw comment.
+- When the person returns, make this available at the moment it helps: beside a selected current message, show the saved detail and a suggested follow-up. Do not invent “we discussed this last time” unless the stored record supports that connection, and do not automatically greet or address the viewer publicly.
+- Do not save every question. A generic one-off definition question normally does not merit a persistent personal memory. A question becomes memorable when it reveals a meaningful ongoing thread or an explicit detail useful to a future conversation.
+- Keep the memory short, neutral, source-linked and private. Store a summary and optional follow-up, not a copy of the full ordinary chat message. The originating message remains separately available under the existing message-retention policy. The owner approves or skips each suggestion and can later forget the memory.
+
+This definition complements the existing stable-ID, explicit-membership, privacy, one-pending-suggestion and two-saved-memory rules above.
+
+
 ## Live Polls workspace checkpoint (2026-10-25)
 
 The owner wants to create polls from the local dashboard, publish them to the active YouTube live chat, close them on demand, and save/view the final vote tallies.

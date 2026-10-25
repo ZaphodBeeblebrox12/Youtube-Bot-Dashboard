@@ -75,6 +75,15 @@ At code checkpoint `4026f55eec93b8492f024510cad21774093b17e7`, GitHub Actions te
 
 These requirements are already recorded in `docs/PROJECT_DECISIONS.md` under **Second AI system: Reply Finder / Personal Attention Queue** and **Community Memory and glanceable live UX checkpoint (2026-10-25)**. Preserve them while working on moderation; do not reinterpret the dashboard as a raw-comment browser.
 
+
+
+### The product meaning of “remembering a member”
+
+Recognition is not just a returning-viewer badge or member label. The host needs a compact reminder of the **specific meaningful question/topic and what made it memorable**, with a natural way to continue that conversation. Example pattern: “Previously asked about entering breakouts too early; the memorable detail was difficulty waiting for confirmation; follow-up: ‘Did that change on your next setup?’” This is illustrative only; never fabricate a past interaction.
+
+A generic question, hello, praise or membership badge alone is not a memory. Do not store every question. Prefer an explicit ongoing challenge, goal, preference, learning point or progress. Keep a short neutral summary linked to the actual source message and stable viewer ID, not a copy of raw chat text. Show the reminder only where it helps the host respond to a current message. Never automatically greet the viewer or claim a prior conversation that the stored memory does not support. Keep owner approval, private display, and forget controls.
+
+
 ### Meaningful questions — curated, attention-protecting queue
 
 The reason for this product is to protect the host from having to manually read a constant stream of potentially hurtful or demoralizing raw comments. The default host-facing workflow should surface the messages genuinely worth responding to, not dump the unfiltered chat stream in front of the host.
