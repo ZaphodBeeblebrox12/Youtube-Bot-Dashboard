@@ -25,6 +25,18 @@ The first implementation slice is a deterministic policy gate around AI classifi
 
 The Streamlit panel, durable live queue, optional Gemini, Qwen, DeepSeek, and Kimi adapters, authenticated JSON bridge, direct `liveChatMessages.streamList` listener, source-confirmed Super Chat detection/priority, and Live Polls workspace are present. The poll workspace saves drafts offline, explicitly inserts a poll into a live chat, closes it, and saves YouTube's returned tallies. Direct OAuth and real-broadcast actions still need an owner-authorized smoke test; they are not claimed as end-to-end verified. Provider-managed prompt caching is used where supported by the configured model; cache hit/write usage is reported when the provider API exposes it. PostgreSQL production migrations, concurrency hardening, and historical comment deletion calls remain outstanding. Session Shield does not call YouTube ban/mute/timeout/delete APIs.
 
+## AI providers and usage analytics
+
+Gemini, Qwen, DeepSeek, and Kimi can be enabled independently. The existing Settings default remains Gemini plus Qwen, so adding credentials does not silently change live routing. Select additional providers under Settings only after their API credentials and model IDs are configured.
+
+- DeepSeek: set `DEEPSEEK_API_KEY` and `DEEPSEEK_MODEL`; `DEEPSEEK_BASE_URL` optionally overrides the official endpoint.
+- Kimi: set `KIMI_API_KEY` (or `MOONSHOT_API_KEY`) and `KIMI_MODEL`; `KIMI_BASE_URL` optionally overrides the global endpoint.
+- Qwen remains endpoint-configurable through `QWEN_API_KEY`, `QWEN_BASE_URL`, and `QWEN_MODEL`. Gemini uses `GEMINI_API_KEY` and `GEMINI_MODEL`.
+- Provider-managed prompt caching is used where supported. The app records reported cache-hit/cache-write usage; a missing field is treated as unknown.
+- Analytics is grouped by provider and pipeline. Estimated cost is shown only with a saved rate card for the exact configured model. Enter the provider's official USD-per-million-token prices in Settings; rates are not hard-coded into application code.
+
+The live-message queue still rotates at batch level, independently for Moderation and Reply Finder. Failed batches keep their assigned provider during retries; the application does not automatically switch providers on a failure.
+
 ## Development
 
 Requires Python 3.11 or newer. For local configuration, copy `.env.example` to `.env`, set a long random `INGEST_API_KEY`, configure at least one AI provider, and place a Google OAuth Desktop client JSON at the configured path. The `.env` file and OAuth token are ignored by Git. OAuth now requests `youtube.force-ssl` so the owner can create/end live polls as well as read chat; re-run the OAuth setup and approve the updated scope if you previously created a read-only token.
