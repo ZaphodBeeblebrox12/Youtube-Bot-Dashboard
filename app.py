@@ -1650,8 +1650,8 @@ elif page == "Analytics":
     summary_rows = []
     for item in provider_report["providers"]:
         coverage = (
-            f'{item["cost_covered_requests"]}/{item["requests"]}'
-            if item["cost_covered_requests"] else "Not priced"
+            f'{item["cost_covered_requests"]}/{item["cost_rate_card_requests"]} priced'
+            if item["cost_rate_card_requests"] else "No rate card"
         )
         summary_rows.append({
             "Provider": item["provider"].title(),
@@ -1666,8 +1666,8 @@ elif page == "Analytics":
             "P95 latency": format_seconds(item["p95_latency_seconds"]),
             "Input tokens": item["input_tokens"],
             "Output tokens": item["output_tokens"],
-            "Cache-hit tokens": item["cached_input_tokens"],
-            "Cache-write tokens": item["cache_write_tokens"],
+            "Cache-hit tokens": format_metric(item["cached_input_tokens"]),
+            "Cache-write tokens": format_metric(item["cache_write_tokens"]),
             "Cache-hit rate": format_metric(
                 None if item["cache_hit_rate_percent"] is None else round(item["cache_hit_rate_percent"], 1),
                 "%",
@@ -1678,7 +1678,7 @@ elif page == "Analytics":
     st.dataframe(summary_rows, hide_index=True, use_container_width=True)
     st.caption(
         "Latency is measured from dispatch to response. Cache metrics are shown only when the provider reports them. "
-        "Costs use the saved model-specific USD rate card; when cache usage is not reported, all input tokens are priced as uncached."
+        "Costs use the saved model-specific USD rate card; input without cache-read detail is priced as uncached, and premium cache-write pricing requires reported write-token usage."
     )
 
     if provider_report["by_pipeline"]:
@@ -1695,14 +1695,14 @@ elif page == "Analytics":
                 "P95 latency": format_seconds(item["p95_latency_seconds"]),
                 "Input tokens": item["input_tokens"],
                 "Output tokens": item["output_tokens"],
-                "Cache-hit tokens": item["cached_input_tokens"],
-                "Cache-write tokens": item["cache_write_tokens"],
+                "Cache-hit tokens": format_metric(item["cached_input_tokens"]),
+                "Cache-write tokens": format_metric(item["cache_write_tokens"]),
                 "Cache-hit rate": format_metric(
                     None if item["cache_hit_rate_percent"] is None else round(item["cache_hit_rate_percent"], 1),
                     "%",
                 ),
                 "Estimated cost": format_cost(item["cost_estimate_usd"]),
-                "Priced calls": f'{item["cost_covered_requests"]}/{item["requests"]}' if item["cost_covered_requests"] else "Not priced",
+                "Priced calls": f'{item["cost_covered_requests"]}/{item["cost_rate_card_requests"]} priced' if item["cost_rate_card_requests"] else "No rate card",
             })
         st.dataframe(pipeline_rows, hide_index=True, use_container_width=True)
     else:
