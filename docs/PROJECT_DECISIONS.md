@@ -19,6 +19,16 @@ Build a dashboard and moderation bot that receives chat data as JSON, batches me
 5. **Dashboard:** Moderation queue, evidence, severity/confidence, offence history, active sanctions, overrides, appeals, audit log, settings and metrics.
 6. **Rollout:** Begin in dry-run mode. Validate against representative examples and false positives before enabling automatic enforcement.
 
+## Provider selection, caching, and analytics
+
+- Supported optional providers: Gemini, Qwen, DeepSeek, and Kimi. Model IDs and API keys remain environment-configured; never commit secrets or guess a model ID.
+- Round-robin routing is independent for Moderation and Reply Finder. Fixed-provider modes support controlled testing. Each request batch retains its selected provider across retries; do not silently reroute a failed batch to a different model.
+- Use provider-managed prompt/context caching where the selected endpoint/model supports it. Keep stable system instructions at the front of requests and message-specific content afterward. Do not cache prior moderation decisions or Reply Finder outputs across changing chat context.
+- Normalize usage fields when available: input/output tokens, cached input tokens, cache-write tokens, request latency, status, and error/retry state. Missing metrics stay unknown, not zero.
+- Cost estimates require an explicitly configured USD rate card for the exact provider/model, including uncached input, cache-hit input, cache-write input, and output rates. Do not hard-code rates or present estimates as provider invoices. When a provider's usage fields cannot disambiguate cache billing, do not fabricate a precise cost.
+- Analytics must separate provider totals and Moderation vs Reply Finder, and clearly identify the reporting window and rate-card/usage coverage.
+- Provider performance-aware routing is not enabled by this feature. First gather measured reliability, response latency, cache use, and cost before proposing automatic selection changes.
+
 ## Moderation categories
 
 - `PERSONAL_ATTACK`: direct personal insults or degrading remarks.
