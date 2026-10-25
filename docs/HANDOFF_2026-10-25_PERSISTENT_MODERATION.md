@@ -221,3 +221,13 @@ The adjacent glance-first filtered-chat requirements remain in force: the live f
 - tests/test_community_memory.py now covers expired saved/pending memory, expiry of detailed visit rows, rolling counters and preservation of returning-viewer recognition after a longer gap. The time-dependent Shield batch test now calculates its due timestamp from the actual current UTC time.
 - **Verification caveat:** The latest recorded Actions run is [40169805354](https://github.com/ZaphodBeeblebrox12/Youtube-Bot-Dashboard/actions/runs/40169805354), which failed one timing-sensitive test because its test clock was hard-coded to midnight; 114 other tests passed. That test has been fixed, but there is no newer Actions result for the current branch head yet. Do not claim the current code has a green full suite until that is confirmed.
 
+## 12. Requirement change control — mandatory approval gate
+
+The owner explicitly requires that **all changes to existing requirements receive their explicit approval before the requirement is changed**.
+
+Never remove, reinterpret, weaken, strengthen, replace, or create an exception to a settled requirement without asking and receiving approval. If requirements conflict, document the conflict and ask; do not silently choose one or invent a compromise. Distinguish implementation that fulfils an existing approved requirement (which should proceed within the approved scope) from changing the requirement itself (which requires approval).
+
+Applies to UI, product behaviour, prompts, filtering criteria, memory retention, moderation/enforcement policy, data handling, tests and documentation. Screenshots guide the intended appearance but do not override the project requirements unless the owner explicitly approves that change. Update the project decisions and this handoff after any approved requirement change.
+
+This approval gate is itself an explicit owner requirement and must not be removed or bypassed.
+
