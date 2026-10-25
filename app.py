@@ -623,6 +623,7 @@ if page == "Dashboard":
                                 if st.button("Use as reply", key=f"dashboard-use-reply-{item['message_id']}"):
                                     st.session_state["selected_live_response_message_id"] = item["message_id"]
                                     st.session_state["selected_live_response_text"] = item["answer"]
+                                    st.session_state["selected_live_response_editor"] = item["answer"]
                             with action_cols[1]:
                                 _copy_response_button(item["answer"])
                             if st.session_state.get("selected_live_response_message_id") == item["message_id"]:
@@ -687,10 +688,33 @@ if page == "Dashboard":
                             if st.button("Use as reply", key=f"dashboard-use-lead-{lead['message_id']}"):
                                 st.session_state["selected_live_response_message_id"] = lead["message_id"]
                                 st.session_state["selected_live_response_text"] = lead["answer"]
+                                st.session_state["selected_live_response_editor"] = lead["answer"]
                         with action_cols[1]:
                             _copy_response_button(lead["answer"])
                         if st.session_state.get("selected_live_response_message_id") == lead["message_id"]:
                             st.caption("Selected for your on-stream response · nothing is posted to YouTube.")
+            reply_message_id = st.session_state.get("selected_live_response_message_id")
+            if reply_message_id:
+                reply_source = next(
+                    (item for item in dashboard["feed_items"] if item["message_id"] == reply_message_id),
+                    None,
+                )
+                with st.container(border=True):
+                    st.markdown("**Reply draft**")
+                    if reply_source:
+                        st.caption(f"Prepared for {reply_source['username']}")
+                    st.caption("Edit before using on stream. This does not send a YouTube chat message.")
+                    st.text_area(
+                        "Edit suggested response",
+                        key="selected_live_response_editor",
+                        height=110,
+                        label_visibility="collapsed",
+                        placeholder="Select “Use as reply” on a suggested response to start a draft.",
+                    )
+                    current_draft = st.session_state.get("selected_live_response_editor", "")
+                    if current_draft.strip():
+                        _copy_response_button(current_draft)
+
             profile = dashboard["lead_profile"]
             st.markdown("#### Member info")
             if profile:
