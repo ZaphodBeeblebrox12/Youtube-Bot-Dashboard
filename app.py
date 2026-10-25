@@ -693,7 +693,7 @@ if page == "Dashboard":
                     st.write(lead["ai_hint"] or "Hint needs review.")
                     st.markdown("**Suggested response (2 sentences)**")
                     lead_answer_text = lead["answer"] or "No response returned."
-                st.markdown(f'<div class="tt-response-scroll">{escape(str(lead_answer_text))}</div>', unsafe_allow_html=True)
+                    st.markdown(f'<div class="tt-response-scroll">{escape(str(lead_answer_text))}</div>', unsafe_allow_html=True)
                     if lead["approved"] and lead["answer"]:
                         action_cols = st.columns([1.05, 1.0], gap="small")
                         with action_cols[0]:
