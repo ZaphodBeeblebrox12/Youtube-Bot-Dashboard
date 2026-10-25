@@ -163,16 +163,17 @@ def create_schema(engine: Engine) -> None:
     live_message_columns = {
         column["name"] for column in inspect(engine).get_columns("live_messages")
     }
-    super_chat_columns = {
+    live_message_columns_to_add = {
         "is_super_chat": "BOOLEAN NOT NULL DEFAULT FALSE",
         "super_chat_amount_micros": "BIGINT",
         "super_chat_currency": "VARCHAR(3)",
         "super_chat_amount_display": "VARCHAR(64)",
         "super_chat_tier": "INTEGER",
+        "avatar_url": "VARCHAR(2048)",
     }
     missing = [
         (name, definition)
-        for name, definition in super_chat_columns.items()
+        for name, definition in live_message_columns_to_add.items()
         if name not in live_message_columns
     ]
     if missing:
@@ -181,6 +182,16 @@ def create_schema(engine: Engine) -> None:
                 connection.exec_driver_sql(
                     f"ALTER TABLE live_messages ADD COLUMN {name} {definition}"
                 )
+
+    # Add the optional avatar column to viewer profiles created by older releases.
+    profile_columns = {
+        column["name"] for column in inspect(engine).get_columns("community_viewer_profiles")
+    }
+    if "avatar_url" not in profile_columns:
+        with engine.begin() as connection:
+            connection.exec_driver_sql(
+                "ALTER TABLE community_viewer_profiles ADD COLUMN avatar_url VARCHAR(2048)"
+            )
 
 
 def register_video(

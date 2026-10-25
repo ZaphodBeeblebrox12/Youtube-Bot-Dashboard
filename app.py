@@ -40,6 +40,7 @@ from youtube_bot_dashboard.live_queue import (
     update_live_queue_config,
 )
 from youtube_bot_dashboard.storage import create_engine_and_sessions, create_schema
+from youtube_bot_dashboard.avatar_utils import normalize_avatar_url
 from youtube_bot_dashboard.live_queue import LIVE_MESSAGE_TEXT_EXPIRED
 from youtube_bot_dashboard.message_retention import (
     get_live_message_retention_days,
@@ -97,6 +98,26 @@ def super_chat_amount_label(message) -> str:
         amount = f"{message.super_chat_amount_micros / 1_000_000:,.2f}"
         return f"{amount} {message.super_chat_currency or ''}".strip()
     return "Amount unavailable"
+
+
+def _avatar_markup(image_url: str | None, display_name: str | None, size: int = 32) -> str:
+    """Render a circular avatar with an initials fallback, without trusting source HTML."""
+    label = str(display_name or "Unknown viewer").strip() or "Unknown viewer"
+    safe_label = escape(label, quote=True)
+    initial = escape(label[0].upper(), quote=True)
+    normalized_url = normalize_avatar_url(image_url)
+    image = ""
+    if normalized_url:
+        safe_url = escape(normalized_url, quote=True)
+        image = (
+            f'<img src="{safe_url}" alt="" loading="lazy" referrerpolicy="no-referrer" '
+            'onerror="this.style.display=\'none\'">'
+        )
+    return (
+        f'<span class="tt-avatar-wrap" style="width:{int(size)}px;height:{int(size)}px" '
+        f'role="img" aria-label="{safe_label} profile picture">'
+        f'<span class="tt-avatar-fallback">{initial}</span>{image}</span>'
+    )
 
 
 def read_counts(session):
@@ -207,6 +228,7 @@ def load_dashboard_snapshot():
                 "session_id": message.session_id,
                 "user_id": message.user_channel_id,
                 "username": message.username or "Unknown viewer",
+                "avatar_url": message.avatar_url,
                 "text": "" if content_expired else message.text,
                 "content_expired": content_expired,
                 "published_at": published_at,
@@ -302,6 +324,7 @@ def load_dashboard_snapshot():
             if lead_profile_row:
                 lead_profile = {
                     "display_name": lead_profile_row.display_name or lead["username"],
+                    "avatar_url": lead_profile_row.avatar_url or lead.get("avatar_url"),
                     "handle": lead_profile_row.user_channel_id,
                     "is_member": lead_profile_row.is_member,
                     "distinct_sessions_seen": lead_profile_row.distinct_sessions_seen,
@@ -357,6 +380,12 @@ st.markdown(
       .tt-red {background: #ffe4e4; color: #aa2424;}
       .tt-amber {background: #fff1cb; color: #905200;}
       .tt-chat-copy {font-size: .98rem; line-height: 1.45; color: #17253e;}
+      .tt-avatar-wrap {display:inline-grid;place-items:center;position:relative;overflow:hidden;border-radius:50%;vertical-align:middle;flex:none;background:#dce6f6;color:#315486;font-weight:800;font-size:.82rem;}
+      .tt-avatar-wrap img {position:absolute;inset:0;width:100%;height:100%;object-fit:cover;border-radius:50%;}
+      .tt-avatar-fallback {display:grid;place-items:center;width:100%;height:100%;}
+      .tt-author-row {display:flex;align-items:center;gap:.55rem;min-width:0;margin-bottom:.45rem;}
+      .tt-author-row > span:last-child {min-width:0;}
+      .tt-member-row {display:flex;align-items:center;gap:.65rem;margin:.3rem 0 .65rem;}
       div[data-testid="stHorizontalBlock"] {gap: .8rem;}
       @media (max-width: 900px) {
         .block-container {padding-left: .7rem; padding-right: .7rem;}
@@ -429,16 +458,21 @@ if page == "Dashboard":
             st.info("No messages have passed the AI safety and usefulness checks yet. No sample comments are fabricated here.")
         for item in dashboard["shown_items"][:6]:
             with st.container(border=True):
-                message_col, response_col = st.columns([1.08, 1.0], gap="small")
+                # Stack the message and its AI assistance within each card, matching the approved layout.
+                message_col = st.container()
+                response_col = st.container()
                 with message_col:
                     member_labels = []
                     if item["user_id"]:
                         with db_session() as session:
                             profile_row = session.get(CommunityViewerProfile, item["user_id"])
-                            if profile_row and profile_row.is_member is True:
-                                member_labels.append("MEMBER")
-                            if profile_row and profile_row.distinct_sessions_seen >= 2:
-                                member_labels.append("RETURNING")
+                            if profile_row:
+                                if not item.get("avatar_url"):
+                                    item["avatar_url"] = profile_row.avatar_url
+                                if profile_row.is_member is True:
+                                    member_labels.append("MEMBER")
+                                if profile_row.distinct_sessions_seen >= 2:
+                                    member_labels.append("RETURNING")
                     safe_username = escape(str(item["username"]))
                     safe_time_label = escape(str(item["time_label"]))
                     tag_html = ""
@@ -449,7 +483,12 @@ if page == "Dashboard":
                         tag_html += '<span class="tt-tag tt-green">MEMBER</span>'
                     if "RETURNING" in member_labels:
                         tag_html += '<span class="tt-tag tt-purple">RETURNING</span>'
-                    st.markdown(f"**{safe_username}**  <span class='tt-muted'>{safe_time_label}</span> {tag_html}", unsafe_allow_html=True)
+                    avatar = _avatar_markup(item.get("avatar_url"), item["username"])
+                    st.markdown(
+                        f'<div class="tt-author-row">{avatar}<span><strong>{safe_username}</strong> '
+                        f'<span class="tt-muted">{safe_time_label}</span> {tag_html}</span></div>',
+                        unsafe_allow_html=True,
+                    )
                     st.write(item["text"])
                     st.caption(
                         f"{item['question_type'].replace('_', ' ').title()} · "
@@ -500,7 +539,15 @@ if page == "Dashboard":
             st.caption("A selected message and member details will appear here when an approved conversation is available.")
         else:
             with st.container(border=True):
-                st.markdown(f"**{lead['username']}** · {lead['time_label']}")
+                lead_avatar_url = lead.get("avatar_url") or (dashboard["lead_profile"] or {}).get("avatar_url")
+                lead_avatar = _avatar_markup(lead_avatar_url, lead["username"], size=36)
+                lead_name = escape(str(lead["username"]))
+                lead_time = escape(str(lead["time_label"]))
+                st.markdown(
+                    f'<div class="tt-author-row">{lead_avatar}<span><strong>{lead_name}</strong> '
+                    f'<span class="tt-muted">{lead_time}</span></span></div>',
+                    unsafe_allow_html=True,
+                )
                 if lead["is_super_chat"]:
                     st.markdown(f"💛 **{lead['super_chat_amount']} Super Chat**")
                 st.write(lead["text"])
@@ -518,7 +565,13 @@ if page == "Dashboard":
                 profile_c2.metric("Messages", profile["message_count"])
                 profile_c3.metric("Memories", len(dashboard["lead_memories"]))
                 member_flag = "Member" if profile["is_member"] is True else "Membership unknown" if profile["is_member"] is None else "Not marked as member"
-                st.caption(f"{profile['display_name']} · {member_flag} · First seen {profile['first_seen_at'].strftime('%d %b %Y')}")
+                member_avatar = _avatar_markup(profile.get("avatar_url") or lead.get("avatar_url"), profile["display_name"], size=45)
+                member_name = escape(str(profile["display_name"]))
+                st.markdown(
+                    f'<div class="tt-member-row">{member_avatar}<span><strong>{member_name}</strong><br>'
+                    f'<span class="tt-muted">{escape(member_flag)} · First seen {profile["first_seen_at"].strftime("%d %b %Y")}</span></span></div>',
+                    unsafe_allow_html=True,
+                )
                 saved_memories = dashboard["lead_memories"]
                 if saved_memories:
                     st.markdown("**Past memories**")

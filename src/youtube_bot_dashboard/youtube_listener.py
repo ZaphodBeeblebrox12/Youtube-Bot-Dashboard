@@ -143,7 +143,7 @@ def _parse_timestamp(value: str | None) -> datetime | None:
 
 def extract_viewer_text(message) -> tuple[
     str, str | None, str | None, datetime | None, bool | None,
-    bool, int | None, str | None, str | None, int | None,
+    bool, int | None, str | None, str | None, int | None, str | None,
 ] | None:
     """Extract source text and source-confirmed YouTube Super Chat metadata."""
     snippet = message.snippet
@@ -183,10 +183,12 @@ def extract_viewer_text(message) -> tuple[
     author = getattr(message, "author_details", None)
     user_id = None
     username = None
+    avatar_url = None
     is_member = None
     if author is not None:
         user_id = getattr(author, "channel_id", None) or None
         username = getattr(author, "display_name", None) or None
+        avatar_url = getattr(author, "profile_image_url", None) or None
         try:
             if author.HasField("is_chat_sponsor"):
                 is_member = bool(getattr(author, "is_chat_sponsor", False))
@@ -200,7 +202,7 @@ def extract_viewer_text(message) -> tuple[
         return None
     return (
         text, user_id, username, published_at, is_member, is_super_chat,
-        amount_micros, currency, amount_display, tier,
+        amount_micros, currency, amount_display, tier, avatar_url,
     )
 
 
@@ -246,7 +248,7 @@ def persist_stream_response(
                 continue
             (
                 text, user_id, username, published_at, is_member, is_super_chat,
-                amount_micros, currency, amount_display, tier,
+                amount_micros, currency, amount_display, tier, avatar_url,
             ) = extracted
             result = ingest_live_message(
                 session,
@@ -257,6 +259,7 @@ def persist_stream_response(
                     user_channel_id=user_id,
                     username=username,
                     is_member=is_member,
+                    avatar_url=avatar_url,
                     published_at=published_at,
                     is_super_chat=is_super_chat,
                     super_chat_amount_micros=amount_micros,

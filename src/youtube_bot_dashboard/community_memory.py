@@ -9,6 +9,7 @@ from datetime import datetime
 from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, select, func
 from sqlalchemy.orm import Mapped, Session, mapped_column
 
+from youtube_bot_dashboard.avatar_utils import normalize_avatar_url
 from youtube_bot_dashboard.storage import Base, utc_now
 
 MEMORY_TYPES = {"CHALLENGE", "GOAL", "PROGRESS", "PREFERENCE", "MILESTONE", "INSIGHT"}
@@ -22,6 +23,7 @@ class CommunityViewerProfile(Base):
 
     user_channel_id: Mapped[str] = mapped_column(String(120), primary_key=True)
     display_name: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    avatar_url: Mapped[str | None] = mapped_column(String(2048), nullable=True)
     is_member: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
     last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False, index=True)
@@ -76,17 +78,20 @@ def record_viewer_activity(
     display_name: str | None,
     session_id: str,
     is_member: bool | None = None,
+    avatar_url: str | None = None,
     observed_at: datetime | None = None,
 ) -> CommunityViewerProfile | None:
     """Record presence by stable channel ID, without saving ordinary chat text."""
     if not user_channel_id or not user_channel_id.strip():
         return None
     now = observed_at or utc_now()
+    normalized_avatar_url = normalize_avatar_url(avatar_url)
     profile = session.get(CommunityViewerProfile, user_channel_id)
     if profile is None:
         profile = CommunityViewerProfile(
             user_channel_id=user_channel_id,
             display_name=display_name,
+            avatar_url=normalized_avatar_url,
             is_member=is_member,
             first_seen_at=now,
             last_seen_at=now,
@@ -112,6 +117,8 @@ def record_viewer_activity(
     profile.total_message_count += 1
     if display_name:
         profile.display_name = display_name
+    if normalized_avatar_url:
+        profile.avatar_url = normalized_avatar_url
     if is_member is not None:
         profile.is_member = is_member
     visit = session.scalar(select(CommunityViewerVisit).where(

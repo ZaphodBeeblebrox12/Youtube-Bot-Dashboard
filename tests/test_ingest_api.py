@@ -22,6 +22,7 @@ def make_body(session_id="stream-1", msg_id="message-1"):
                 message_id=msg_id,
                 user_id="channel-1",
                 username="Viewer",
+                avatar_url="https://yt3.ggpht.com/example-avatar",
                 text="A normal live chat question",
             )
         ],
@@ -42,6 +43,26 @@ def test_json_ingest_creates_session_and_both_pipeline_tasks():
                 LivePipeline.MODERATION.value,
                 LivePipeline.REPLY_FINDER.value,
             }
+    finally:
+        engine.dispose()
+
+
+def test_json_ingest_persists_avatar_on_message_and_viewer_profile():
+    engine, factory = create_engine_and_sessions("sqlite://")
+    create_schema(engine)
+    try:
+        result = ingest_payload(factory, make_body())
+        assert result["created"] == 1
+        with factory() as session:
+            from youtube_bot_dashboard.community_memory import CommunityViewerProfile
+            from youtube_bot_dashboard.live_queue import LiveMessageRecord
+
+            message = session.get(LiveMessageRecord, "message-1")
+            profile = session.get(CommunityViewerProfile, "channel-1")
+            assert message is not None
+            assert profile is not None
+            assert message.avatar_url == "https://yt3.ggpht.com/example-avatar"
+            assert profile.avatar_url == "https://yt3.ggpht.com/example-avatar"
     finally:
         engine.dispose()
 
