@@ -63,7 +63,15 @@ class KimiProvider:
         usage = _field(response, "usage")
         details = _field(usage, "prompt_tokens_details")
         cached = _field(details, "cached_tokens")
+        if cached is None:
+            cached = _field(usage, "prompt_cache_hit_tokens")
+        if cached is None:
+            cached = _field(usage, "cache_read_input_tokens")
         cache_write = _field(details, "cache_write_tokens")
+        if cache_write is None:
+            cache_write = _field(usage, "cache_creation_input_tokens")
+        if cache_write is None:
+            cache_write = _field(usage, "cache_write_tokens")
         return ProviderResponse(
             text=text,
             model_id=self.model_id,
