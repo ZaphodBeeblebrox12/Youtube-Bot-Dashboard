@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import os
 from contextlib import contextmanager
+from datetime import datetime, timedelta, timezone
 from html import escape
 
 import streamlit as st
@@ -47,6 +48,13 @@ from youtube_bot_dashboard.message_retention import (
     run_live_message_retention_cleanup,
 )
 from youtube_bot_dashboard.providers.registry import ProviderRegistry
+from youtube_bot_dashboard.provider_analytics import (
+    PRICE_FIELDS,
+    ProviderRateCard,
+    get_provider_analytics,
+    load_provider_rate_card,
+    save_provider_rate_card,
+)
 from youtube_bot_dashboard.live_polls import (
     POLL_ACTIVE,
     POLL_CLOSED,
@@ -816,7 +824,7 @@ elif page == "Settings":
         )
         providers = st.multiselect(
             "Providers available for testing",
-            options=[ProviderName.GEMINI, ProviderName.QWEN],
+            options=[ProviderName.GEMINI, ProviderName.QWEN, ProviderName.DEEPSEEK, ProviderName.KIMI],
             default=list(config.enabled_providers),
             format_func=lambda provider: provider.value.title(),
         )
@@ -826,18 +834,24 @@ elif page == "Settings":
                 ProviderStrategy.ROUND_ROBIN,
                 ProviderStrategy.GEMINI_ONLY,
                 ProviderStrategy.QWEN_ONLY,
+                ProviderStrategy.DEEPSEEK_ONLY,
+                ProviderStrategy.KIMI_ONLY,
             ],
             index=[
                 ProviderStrategy.ROUND_ROBIN,
                 ProviderStrategy.GEMINI_ONLY,
                 ProviderStrategy.QWEN_ONLY,
+                ProviderStrategy.DEEPSEEK_ONLY,
+                ProviderStrategy.KIMI_ONLY,
             ].index(config.provider_strategy),
             format_func=lambda option: {
-                ProviderStrategy.ROUND_ROBIN: "Alternate batches between enabled providers",
+                ProviderStrategy.ROUND_ROBIN: "Round robin across enabled providers",
                 ProviderStrategy.GEMINI_ONLY: "Gemini only",
                 ProviderStrategy.QWEN_ONLY: "Qwen only",
+                ProviderStrategy.DEEPSEEK_ONLY: "DeepSeek only",
+                ProviderStrategy.KIMI_ONLY: "Kimi only",
             }[option],
-            help="Round-robin advances independently for moderation and reply-finder queues to compare each task type fairly.",
+            help="Round robin advances independently for Moderation and Reply Finder. In round-robin mode, retries stay with their assigned provider while it remains enabled; fixed-provider modes support controlled comparisons.",
         )
         max_attempts = st.number_input(
             "Maximum provider attempts per batch item",
@@ -868,6 +882,72 @@ elif page == "Settings":
             st.success("Settings saved. New batches will use the updated configuration.")
         except (ValueError, TypeError) as exc:
             st.error(f"Settings were not saved: {exc}")
+
+    st.divider()
+    st.subheader("Provider pricing")
+    st.caption(
+        "Enter the official rates for the exact configured model, in USD per million tokens. "
+        "Use 0 when a token category is free/not billed; cost stays unknown until all four rates are saved. "
+        "Rates are never assumed from a model name."
+    )
+    provider_model_env = {
+        ProviderName.GEMINI: "GEMINI_MODEL",
+        ProviderName.QWEN: "QWEN_MODEL",
+        ProviderName.DEEPSEEK: "DEEPSEEK_MODEL",
+        ProviderName.KIMI: "KIMI_MODEL",
+    }
+    provider_labels = {
+        "input_usd_per_million": "Uncached input · USD / 1M tokens",
+        "cached_input_usd_per_million": "Cache-hit input · USD / 1M tokens",
+        "cache_write_usd_per_million": "Cache-write input · USD / 1M tokens",
+        "output_usd_per_million": "Output · USD / 1M tokens",
+    }
+    for provider in (ProviderName.GEMINI, ProviderName.QWEN, ProviderName.DEEPSEEK, ProviderName.KIMI):
+        configured_model = (
+            provider_registry.get(provider).model_id
+            if provider_registry.has(provider)
+            else os.getenv(provider_model_env[provider])
+        )
+        with st.expander(f"{provider.value.title()} rate card", expanded=False):
+            if not configured_model:
+                st.caption(f"Set {provider_model_env[provider]} in your environment before configuring a model-specific rate card.")
+                continue
+            st.caption(f"Model: {configured_model}")
+            with db_session() as session:
+                current_rates = load_provider_rate_card(session, provider, configured_model)
+            rate_inputs = {}
+            with st.form(f"provider_pricing_{provider.value.lower()}"):
+                rate_columns = st.columns(2)
+                for index, field in enumerate(PRICE_FIELDS):
+                    current_value = "" if current_rates is None else format(getattr(current_rates, field), ".10g")
+                    with rate_columns[index % 2]:
+                        rate_inputs[field] = st.text_input(
+                            provider_labels[field],
+                            value=current_value,
+                            key=f"provider_rate_{provider.value.lower()}_{field}_{configured_model}",
+                            help="Rates apply only to the model shown above. Leave 0 only if that category is genuinely free/not billed.",
+                        )
+                save_rates = st.form_submit_button("Save rate card", type="primary")
+                clear_rates = st.form_submit_button("Clear rate card")
+            if clear_rates:
+                with db_session() as session:
+                    save_provider_rate_card(session, provider, configured_model, None)
+                    session.commit()
+                st.success(f"{provider.value.title()} model pricing cleared; cost will show as not configured.")
+                st.rerun()
+            if save_rates:
+                try:
+                    if any(not value.strip() for value in rate_inputs.values()):
+                        raise ValueError("Enter all four rates. Use 0 for a category that is not billed.")
+                    rates = ProviderRateCard(**{
+                        field: float(value.strip()) for field, value in rate_inputs.items()
+                    })
+                    with db_session() as session:
+                        save_provider_rate_card(session, provider, configured_model, rates)
+                        session.commit()
+                    st.success(f"Saved pricing for {provider.value.title()} · {configured_model}.")
+                except (ValueError, TypeError) as exc:
+                    st.error(f"Pricing was not saved: {exc}")
 
     st.divider()
     st.subheader("Live-message text retention")
@@ -1527,12 +1607,105 @@ elif page == "Analytics":
     y.metric("Approved / shown", len(dashboard["shown_items"]))
     z.metric("Filtered / hidden", len(dashboard["hidden_items"]))
     st.markdown("#### AI providers")
-    provider_columns = st.columns(2)
-    for column, provider in zip(provider_columns, [ProviderName.GEMINI, ProviderName.QWEN]):
+    provider_columns = st.columns(4)
+    all_providers = (
+        ProviderName.GEMINI,
+        ProviderName.QWEN,
+        ProviderName.DEEPSEEK,
+        ProviderName.KIMI,
+    )
+    for column, provider in zip(provider_columns, all_providers):
         if provider_registry.has(provider):
             column.success(f"{provider.value.title()} configured")
             column.caption(f"Model: {provider_registry.get(provider).model_id}")
         else:
             column.warning(f"{provider.value.title()} not configured")
+
+    st.divider()
+    st.markdown("#### Provider performance")
+    period = st.selectbox(
+        "Reporting window",
+        options=["Last 24 hours", "Last 7 days", "Last 30 days", "All time"],
+        index=1,
+        key="provider_analytics_period",
+    )
+    period_delta = {
+        "Last 24 hours": timedelta(hours=24),
+        "Last 7 days": timedelta(days=7),
+        "Last 30 days": timedelta(days=30),
+    }.get(period)
+    since = datetime.now(timezone.utc) - period_delta if period_delta is not None else None
+    with db_session() as session:
+        provider_report = get_provider_analytics(session, since=since)
+
+    def format_metric(value, suffix=""):
+        return "—" if value is None else f"{value}{suffix}"
+
+    def format_seconds(value):
+        return "—" if value is None else f"{value:.2f}s"
+
+    def format_cost(value):
+        return "Not priced" if value is None else f"${value:.6f}"
+
+    summary_rows = []
+    for item in provider_report["providers"]:
+        coverage = (
+            f'{item["cost_covered_requests"]}/{item["cost_rate_card_requests"]} priced'
+            if item["cost_rate_card_requests"] else "No rate card"
+        )
+        summary_rows.append({
+            "Provider": item["provider"].title(),
+            "Requests": item["requests"],
+            "Success rate": format_metric(
+                None if item["success_rate_percent"] is None else round(item["success_rate_percent"], 1),
+                "%",
+            ),
+            "Failures": item["failed_requests"],
+            "In flight": item["in_flight_requests"],
+            "Avg latency": format_seconds(item["average_latency_seconds"]),
+            "P95 latency": format_seconds(item["p95_latency_seconds"]),
+            "Input tokens": item["input_tokens"],
+            "Output tokens": item["output_tokens"],
+            "Cache-hit tokens": format_metric(item["cached_input_tokens"]),
+            "Cache-write tokens": format_metric(item["cache_write_tokens"]),
+            "Cache-hit rate": format_metric(
+                None if item["cache_hit_rate_percent"] is None else round(item["cache_hit_rate_percent"], 1),
+                "%",
+            ),
+            "Estimated cost": format_cost(item["cost_estimate_usd"]),
+            "Priced calls": coverage,
+        })
+    st.dataframe(summary_rows, hide_index=True, use_container_width=True)
+    st.caption(
+        "Latency is measured from dispatch to response. Cache-hit rate uses only requests reporting both cache-hit and total-input tokens; incomplete cache telemetry is excluded. "
+        "Gemini output-token totals include thinking tokens when reported. Costs use saved model-specific USD rate cards; input without cache-read detail is priced as uncached, and premium cache-write pricing requires reported write-token usage."
+    )
+
+    if provider_report["by_pipeline"]:
+        st.markdown("##### Moderation vs. Reply Finder")
+        pipeline_rows = []
+        for item in provider_report["by_pipeline"]:
+            pipeline_rows.append({
+                "Provider": item["provider"].title(),
+                "Pipeline": item["pipeline"].replace("_", " ").title(),
+                "Model": item["model"] or "Unknown",
+                "Requests": item["requests"],
+                "Failures": item["failed_requests"],
+                "Avg latency": format_seconds(item["average_latency_seconds"]),
+                "P95 latency": format_seconds(item["p95_latency_seconds"]),
+                "Input tokens": item["input_tokens"],
+                "Output tokens": item["output_tokens"],
+                "Cache-hit tokens": format_metric(item["cached_input_tokens"]),
+                "Cache-write tokens": format_metric(item["cache_write_tokens"]),
+                "Cache-hit rate": format_metric(
+                    None if item["cache_hit_rate_percent"] is None else round(item["cache_hit_rate_percent"], 1),
+                    "%",
+                ),
+                "Estimated cost": format_cost(item["cost_estimate_usd"]),
+                "Priced calls": f'{item["cost_covered_requests"]}/{item["cost_rate_card_requests"]} priced' if item["cost_rate_card_requests"] else "No rate card",
+            })
+        st.dataframe(pipeline_rows, hide_index=True, use_container_width=True)
+    else:
+        st.info("No sent provider requests match this reporting window yet. Configure providers and run test traffic to populate this comparison.")
 
 st.sidebar.caption("Database: " + ("DATABASE_URL configured" if os.environ.get("DATABASE_URL") else "local SQLite development database"))

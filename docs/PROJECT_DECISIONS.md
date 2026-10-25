@@ -8,7 +8,7 @@ This document is the source of truth for settled decisions. Update it when decis
 
 ## Product goal
 
-Build a dashboard and moderation bot that receives chat data as JSON, batches messages for classification by a selectable AI provider (Gemini or Qwen), records confirmed offences, and applies a configurable escalation policy. Inspect actual input samples and existing code before assuming fields or platform capabilities.
+Build a dashboard and moderation bot that receives chat data as JSON, batches messages for classification by selectable AI providers (Gemini, Qwen, DeepSeek, and Kimi), records confirmed offences, and applies a configurable escalation policy. Inspect actual input samples and existing code before assuming fields or platform capabilities.
 
 ## Architecture
 
@@ -18,6 +18,16 @@ Build a dashboard and moderation bot that receives chat data as JSON, batches me
 4. **Enforcement adapter:** Applies platform-supported restrictions only after backend policy authorizes them. The AI never directly executes bans or decides lifetime strike counts.
 5. **Dashboard:** Moderation queue, evidence, severity/confidence, offence history, active sanctions, overrides, appeals, audit log, settings and metrics.
 6. **Rollout:** Begin in dry-run mode. Validate against representative examples and false positives before enabling automatic enforcement.
+
+## Provider selection, caching, and analytics
+
+- Supported optional providers: Gemini, Qwen, DeepSeek, and Kimi. Model IDs and API keys remain environment-configured; never commit secrets or guess a model ID.
+- Round-robin routing is independent for Moderation and Reply Finder. Fixed-provider modes support controlled testing. Each request batch retains its selected provider across retries; do not silently reroute a failed batch to a different model.
+- Use provider-managed prompt/context caching where the selected endpoint/model supports it. Keep stable system instructions at the front of requests and message-specific content afterward. Do not cache prior moderation decisions or Reply Finder outputs across changing chat context.
+- Normalize usage fields when available: input/output tokens, cached input tokens, cache-write tokens, request latency, status, and error/retry state. Missing metrics stay unknown, not zero.
+- Cost estimates require an explicitly configured USD rate card for the exact provider/model, including uncached input, cache-hit input, cache-write input, and output rates. Do not hard-code rates or present estimates as provider invoices. When a provider's usage fields cannot disambiguate cache billing, do not fabricate a precise cost.
+- Analytics must separate provider totals and Moderation vs Reply Finder, and clearly identify the reporting window and rate-card/usage coverage.
+- Provider performance-aware routing is not enabled by this feature. First gather measured reliability, response latency, cache use, and cost before proposing automatic selection changes.
 
 ## Moderation categories
 
@@ -855,3 +865,13 @@ All cards must use live database-backed data. Do not invent live viewer counts o
 - The cleanup is transaction-based and must fail closed on malformed stored batch payloads. Existing content hashes/metadata remain for deduplication/audit.
 - This policy stops retaining old raw bodies; database files may reuse freed pages without shrinking their physical file size. SQLite/PostgreSQL compaction is a separate maintenance action, not part of this dial.
 
+
+
+## Provider routing and observability
+
+- Optional providers: Gemini, Qwen, DeepSeek, and Kimi. Model IDs and credentials are supplied via environment variables; providers without valid configuration are treated as unavailable.
+- Routing remains batch-level round robin with independent persistent rotation for Moderation and Reply Finder. Fixed-provider modes are intended for controlled testing. In round-robin mode, a retryable task stays on its assigned provider while that provider remains enabled; if the provider is disabled/unavailable, the task rejoins normal routing. A request failure alone never triggers provider switching.
+- Prompt/context caching is handled by each provider where supported. Report cache-hit and cache-write tokens only when the API returns those measurements; missing usage is unknown, not zero. Stable system prompts should remain at the start of inputs to help providers reuse eligible prefixes.
+- Provider analytics track request outcomes, latency, input/output tokens, cache usage, and cost estimates by provider and pipeline. Cost is not guessed: an owner must save a rate card for the exact configured model in Settings. Rates are USD per million tokens. Cost estimates only cover requests with reported input/output usage; when cache details are unavailable, input is conservatively estimated at the uncached-input rate.
+- Performance-aware routing is deliberately deferred until actual measurements exist. Round robin remains the baseline so provider comparisons are not biased by automatic selection.
+- Feature implementation branch: `feature/four-provider-analytics`. Changes are not merged or deployed pending owner review.

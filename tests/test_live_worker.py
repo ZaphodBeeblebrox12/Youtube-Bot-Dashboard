@@ -165,6 +165,7 @@ class FakeGemini:
             input_tokens=300,
             output_tokens=80,
             cached_input_tokens=100,
+            cache_write_tokens=25,
         )
 
 
@@ -201,6 +202,7 @@ def test_worker_dispatches_provider_and_persists_full_response_lifecycle():
             assert saved_batch.status == "COMPLETED"
             assert saved_batch.input_tokens == 300
             assert saved_batch.cached_input_tokens == 100
+            assert saved_batch.cache_write_tokens == 25
             assert task.state == "COMPLETED"
             assert task.provider == "GEMINI"
     finally:

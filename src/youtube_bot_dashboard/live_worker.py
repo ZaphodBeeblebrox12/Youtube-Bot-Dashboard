@@ -370,7 +370,12 @@ def _effective_config(config: LiveQueueConfig, registry: ProviderRegistry) -> Li
         if not enabled:
             return None
         return replace(config, enabled_providers=enabled)
-    required = ProviderName.GEMINI if config.provider_strategy is ProviderStrategy.GEMINI_ONLY else ProviderName.QWEN
+    required = {
+        ProviderStrategy.GEMINI_ONLY: ProviderName.GEMINI,
+        ProviderStrategy.QWEN_ONLY: ProviderName.QWEN,
+        ProviderStrategy.DEEPSEEK_ONLY: ProviderName.DEEPSEEK,
+        ProviderStrategy.KIMI_ONLY: ProviderName.KIMI,
+    }.get(config.provider_strategy)
     return config if required in available and required in config.enabled_providers else None
 
 
@@ -444,6 +449,7 @@ def process_prepared_batch(session_factory, batch_id: str, registry: ProviderReg
                 input_tokens=provider_result.input_tokens,
                 output_tokens=provider_result.output_tokens,
                 cached_input_tokens=provider_result.cached_input_tokens,
+                cache_write_tokens=provider_result.cache_write_tokens,
             )
             memory_suggestions = []
             if pipeline is LivePipeline.REPLY_FINDER:
@@ -490,6 +496,7 @@ def process_prepared_batch(session_factory, batch_id: str, registry: ProviderReg
             "input_tokens": provider_result.input_tokens,
             "output_tokens": provider_result.output_tokens,
             "cached_input_tokens": provider_result.cached_input_tokens,
+            "cache_write_tokens": provider_result.cache_write_tokens,
         }
     except Exception as exc:
         logger.exception("AI batch %s failed", batch_id)

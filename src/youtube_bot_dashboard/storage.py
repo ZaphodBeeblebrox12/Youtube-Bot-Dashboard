@@ -145,6 +145,16 @@ def create_schema(engine: Engine) -> None:
 
     Base.metadata.create_all(engine)
 
+    # Additive compatibility migration for usage telemetry on existing databases.
+    batch_columns = {
+        column["name"] for column in inspect(engine).get_columns("live_ai_request_batches")
+    }
+    if "cache_write_tokens" not in batch_columns:
+        with engine.begin() as connection:
+            connection.exec_driver_sql(
+                "ALTER TABLE live_ai_request_batches ADD COLUMN cache_write_tokens INTEGER"
+            )
+
     # Ensure the retention query index also exists in databases created before
     # the index was added to LiveMessageRecord.
     for index in _live_queue.LiveMessageRecord.__table__.indexes:

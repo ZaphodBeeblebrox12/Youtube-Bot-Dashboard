@@ -23,7 +23,19 @@ A private, local-first livestream co-pilot with a curated answer queue, low-nois
 
 The first implementation slice is a deterministic policy gate around AI classifications. It separates target, sentiment, and conduct type. Negative sentiment alone is never enough to propose deletion. Genuine criticism such as "This lesson is terrible and your explanation makes no sense" is kept by default. High-confidence personal abuse or another explicitly mapped violation can become a deletion candidate, but still requires owner approval.
 
-The Streamlit panel, durable live queue, optional Gemini/Qwen adapters, authenticated JSON bridge, direct `liveChatMessages.streamList` listener, source-confirmed Super Chat detection/priority, and Live Polls workspace are present. The poll workspace saves drafts offline, explicitly inserts a poll into a live chat, closes it, and saves YouTube's returned tallies. Direct OAuth and real-broadcast actions still need an owner-authorized smoke test; they are not claimed as end-to-end verified. Provider-specific prompt caching, PostgreSQL production migrations, and historical comment deletion calls remain outstanding. Session Shield does not call YouTube ban/mute/timeout/delete APIs.
+The Streamlit panel, durable live queue, optional Gemini, Qwen, DeepSeek, and Kimi adapters, authenticated JSON bridge, direct `liveChatMessages.streamList` listener, source-confirmed Super Chat detection/priority, and Live Polls workspace are present. The poll workspace saves drafts offline, explicitly inserts a poll into a live chat, closes it, and saves YouTube's returned tallies. Direct OAuth and real-broadcast actions still need an owner-authorized smoke test; they are not claimed as end-to-end verified. Provider-managed prompt caching is used where supported by the configured model; cache hit/write usage is reported when the provider API exposes it. PostgreSQL production migrations, concurrency hardening, and historical comment deletion calls remain outstanding. Session Shield does not call YouTube ban/mute/timeout/delete APIs.
+
+## AI providers and usage analytics
+
+Gemini, Qwen, DeepSeek, and Kimi can be enabled independently. The existing Settings default remains Gemini plus Qwen, so adding credentials does not silently change live routing. Select additional providers under Settings only after their API credentials and model IDs are configured.
+
+- DeepSeek: set `DEEPSEEK_API_KEY` and `DEEPSEEK_MODEL`; `DEEPSEEK_BASE_URL` optionally overrides the official endpoint.
+- Kimi: set `KIMI_API_KEY` (or `MOONSHOT_API_KEY`) and `KIMI_MODEL`; `KIMI_BASE_URL` optionally overrides the global endpoint.
+- Qwen remains endpoint-configurable through `QWEN_API_KEY`, `QWEN_BASE_URL`, and `QWEN_MODEL`. Gemini uses `GEMINI_API_KEY` and `GEMINI_MODEL`.
+- Provider-managed prompt caching is used where supported. The app records reported cache-hit/cache-write usage; a missing field is treated as unknown.
+- Analytics is grouped by provider and pipeline. Estimated cost is shown only with a saved rate card for the exact configured model. Enter the provider's official USD-per-million-token prices in Settings; rates are not hard-coded into application code.
+
+The live-message queue still rotates at batch level, independently for Moderation and Reply Finder. In round-robin mode, retryable batches keep their assigned provider while it remains enabled; if that provider is disabled or unavailable, the task can rejoin normal routing. The application does not automatically switch providers just because a request failed.
 
 ## Development
 
@@ -54,17 +66,17 @@ python -m youtube_bot_dashboard.live_worker
 - [x] Incremental comment upsert (new / unchanged / edited) and classification queue primitives
 - [x] Persistent live message/task/batch records for separate moderation and Reply Finder pipelines
 - [x] Configurable live batch settings persisted to the database (2-second delay, 100-message cap, approximate token budget)
-- [x] Round-robin Gemini/Qwen batch routing state, with per-pipeline rotation and fixed-provider options
+- [x] Round-robin Gemini/Qwen/DeepSeek/Kimi batch routing state, with per-pipeline rotation and fixed-provider options
 - [x] Session Shield filtering before either AI payload is created; shielded viewers' later messages are not sent to moderation or Reply Finder providers
 - [x] Initial Streamlit settings/queue-status dashboard with authenticated normalized-JSON ingest bridge
 - [x] Live moderation and Reply Finder system-prompt templates
 - [ ] PostgreSQL production configuration, migrations, and concurrency hardening
-- [x] Background worker and Gemini/Qwen provider adapters with response-schema validation
+- [x] Background worker and Gemini/Qwen/DeepSeek/Kimi provider adapters with response-schema validation
 - [x] Environment-based provider registry (model IDs/API credentials supplied outside source)
 - [x] Authenticated normalized-JSON ingestion endpoint for a trusted chat source
 - [x] YouTube OAuth setup and direct streamList listener code (live-broadcast verification pending)
 - [x] Live Polls draft, explicit launch/end actions, final tally persistence, and dashboard results view (real-broadcast verification pending)
-- [ ] Provider-specific prompt caching and usage reconciliation
+- [x] Provider-managed prompt-cache usage reporting, latency/failure analytics, and model-specific configurable token pricing
 - [x] One-at-a-time private Reply Finder card UI and two-sentence answer briefs
 - [x] Community memory profiles based on stable channel ID, visit history, and optional member badge
 - [x] Meaningful memory suggestions within the Reply Finder pass, owner review, two-saved-memory cap, forget controls, and glanceable returning-viewer cue
